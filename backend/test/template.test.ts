@@ -169,6 +169,24 @@ describe('infra/template.yaml: funciones Lambda', () => {
         access: { DonationsTable: ['dynamodb:Query'] },
         env: { DONATIONS_TABLE: { Ref: 'DonationsTable' } },
       },
+      GetDonationFunction: {
+        access: { DonationsTable: ['dynamodb:GetItem'] },
+        env: { DONATIONS_TABLE: { Ref: 'DonationsTable' } },
+      },
+      CreateDonationFunction: {
+        access: {
+          IdempotencyTable: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+          DonationsTable: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+          ProjectsTable: ['dynamodb:ConditionCheckItem', 'dynamodb:GetItem'],
+          AuditEventsTable: ['dynamodb:PutItem'],
+        },
+        env: {
+          DONATIONS_TABLE: { Ref: 'DonationsTable' },
+          IDEMPOTENCY_TABLE: { Ref: 'IdempotencyTable' },
+          ...PROJECTS,
+          ...AUDIT,
+        },
+      },
     };
     expect(functions.map(([name]) => name).sort()).toEqual(Object.keys(expected).sort());
 

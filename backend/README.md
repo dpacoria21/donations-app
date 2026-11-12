@@ -145,16 +145,18 @@ datos inválidos → 400, editar, meta menor que lo recaudado → 409, publicar,
 
 ## Endpoints implementados
 
-| Método | Ruta                               | Acceso                         | Respuestas                        |
-| ------ | ---------------------------------- | ------------------------------ | --------------------------------- |
-| GET    | `/v1/projects`                     | Público                        | 200                               |
-| GET    | `/v1/projects/{projectId}`         | Público (solo PUBLICADO)       | 200 / 404                         |
-| GET    | `/v1/projects/{projectId}/stats`   | Público (solo PUBLICADO)       | 200 / 404                         |
-| GET    | `/v1/donations/me`                 | `api/donations.read` + DONANTE | 200 / 401 / 403                   |
-| GET    | `/v1/manage/projects`              | `api/projects.write` + GESTOR  | 200 / 401 / 403                   |
-| POST   | `/v1/projects`                     | `api/projects.write` + GESTOR  | 201 / 400 / 401 / 403             |
-| PATCH  | `/v1/projects/{projectId}`         | `api/projects.write` + GESTOR  | 200 / 400 / 401 / 403 / 404 / 409 |
-| PATCH  | `/v1/projects/{projectId}/publish` | `api/projects.write` + GESTOR  | 200 / 401 / 403 / 404 / 409       |
+| Método | Ruta                                | Acceso                                  | Respuestas                        |
+| ------ | ----------------------------------- | --------------------------------------- | --------------------------------- |
+| GET    | `/v1/projects`                      | Público                                 | 200                               |
+| GET    | `/v1/projects/{projectId}`          | Público (solo PUBLICADO)                | 200 / 404                         |
+| GET    | `/v1/projects/{projectId}/stats`    | Público (solo PUBLICADO)                | 200 / 404                         |
+| GET    | `/v1/donations/me`                  | `api/donations.read` + DONANTE          | 200 / 401 / 403                   |
+| GET    | `/v1/donations/{donationId}`        | `api/donations.read` + DONANTE (propia) | 200 / 401 / 403 / 404             |
+| POST   | `/v1/donations` + `Idempotency-Key` | `api/donations.write` + DONANTE         | 201 / 400 / 401 / 403 / 404 / 409 |
+| GET    | `/v1/manage/projects`               | `api/projects.write` + GESTOR           | 200 / 401 / 403                   |
+| POST   | `/v1/projects`                      | `api/projects.write` + GESTOR           | 201 / 400 / 401 / 403             |
+| PATCH  | `/v1/projects/{projectId}`          | `api/projects.write` + GESTOR           | 200 / 400 / 401 / 403 / 404 / 409 |
+| PATCH  | `/v1/projects/{projectId}/publish`  | `api/projects.write` + GESTOR           | 200 / 401 / 403 / 404 / 409       |
 
 La edición sigue la decisión D2 de [tasks.md](../tasks.md): título, descripción y meta en
 cualquier estado; la meta nunca por debajo de lo recaudado; no se puede despublicar.
@@ -183,7 +185,7 @@ coincidir con su esquema.
 backend/
 ├── src/
 │   ├── projects/   # modelo, repositorio (memoria → DynamoDB) y handlers públicos
-│   ├── donations/  # historial propio (GET /v1/donations/me); creación en la fase 4
+│   ├── donations/  # intención con idempotencia, historial y consulta propia
 │   ├── authz/      # identidad, grupos y scopes desde claims del JWT authorizer
 │   └── shared/     # errores, respuestas HTTP y logger JSON
 ├── dev/            # API local para Postman y el frontend (no se despliega)
@@ -191,6 +193,21 @@ backend/
 ├── postman/        # colección y entornos de Postman (local y academic)
 └── test/           # pruebas Vitest, incluida la revisión de infra/template.yaml
 ```
+
+## Donaciones e idempotencia
+
+`POST /v1/donations` registra una intención **simulada** (`PENDIENTE_SIMULACION`): no hay cobro
+ni se piden datos de pago (CA-05.5). Exige la cabecera `Idempotency-Key` (UUID):
+
+1. Si la clave ya existe para ese usuario: con el mismo cuerpo se repite la respuesta original
+   (`Idempotency-Replayed: true`); con otro cuerpo, 409. Se compara el SHA-256 del cuerpo
+   normalizado.
+2. Si es nueva: el proyecto debe existir (404) y estar PUBLICADO (409).
+3. Un solo `TransactWriteItems` guarda la clave (`attribute_not_exists(pk)`), la donación, el
+   evento de auditoría y comprueba que el proyecto siga PUBLICADO. De varias solicitudes
+   simultáneas con la misma clave, solo una crea la donación y las demás repiten su respuesta.
+
+Los registros de idempotencia caducan a las 24 h (TTL `expiresAt`).
 
 ## Auditoría
 

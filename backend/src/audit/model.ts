@@ -1,7 +1,12 @@
 import { createHmac, randomUUID } from 'node:crypto';
 
-/** Tipos de evento (partición de la tabla `AuditEvents`, design.md §5). La fase 4 añade los de donaciones. */
-export const AUDIT_EVENT_TYPES = ['PROJECT_CREATE', 'PROJECT_UPDATE', 'PROJECT_PUBLISH'] as const;
+/** Tipos de evento (partición de la tabla `AuditEvents`, design.md §5). */
+export const AUDIT_EVENT_TYPES = [
+  'PROJECT_CREATE',
+  'PROJECT_UPDATE',
+  'PROJECT_PUBLISH',
+  'DONATION_CREATE',
+] as const;
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
 
 /**

@@ -811,6 +811,152 @@ Resources:
               Authorizer: CognitoJwt
               AuthorizationScopes: [api/donations.read]
 
+  CreateDonationLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-create-donation
+      RetentionInDays: !Ref LogRetentionDays
+
+  # Una transacción escribe la clave de idempotencia, la donación, el evento de auditoría y
+  # comprueba que el proyecto siga PUBLICADO (AD-05). GetItem: reintentos y verificaciones.
+  CreateDonationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: POST /v1/donations. Idempotency, Donations y AuditEvents (escritura); Projects (lectura y ConditionCheck).
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt CreateDonationLogGroup.Arn
+        - PolicyName: idempotency-records
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem]
+                Resource: !GetAtt IdempotencyTable.Arn
+        - PolicyName: create-donation
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem]
+                Resource: !GetAtt DonationsTable.Arn
+        - PolicyName: check-published-project
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:ConditionCheckItem]
+                Resource: !GetAtt ProjectsTable.Arn
+        - PolicyName: write-audit-events
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:PutItem]
+                Resource: !GetAtt AuditEventsTable.Arn
+
+  CreateDonationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-create-donation
+      Description: POST /v1/donations (HU-05)
+      CodeUri: ../backend/dist/donations
+      Handler: handlers.createDonation
+      Role: !GetAtt CreateDonationRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref CreateDonationLogGroup
+      Environment:
+        Variables:
+          DONATIONS_TABLE: !Ref DonationsTable
+          IDEMPOTENCY_TABLE: !Ref IdempotencyTable
+          PROJECTS_TABLE: !Ref ProjectsTable
+          AUDIT_EVENTS_TABLE: !Ref AuditEventsTable
+          AUDIT_PSEUDONYM_KEY: !Ref AWS::StackId
+      Events:
+        CreateDonation:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: POST
+            Path: /v1/donations
+            Auth:
+              Authorizer: CognitoJwt
+              AuthorizationScopes: [api/donations.write]
+
+  GetDonationLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-get-donation
+      RetentionInDays: !Ref LogRetentionDays
+
+  GetDonationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: GET /v1/donations/{donationId}. Solo GetItem sobre Donations.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt GetDonationLogGroup.Arn
+        - PolicyName: get-donation
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:GetItem]
+                Resource: !GetAtt DonationsTable.Arn
+
+  # La ruta estática /v1/donations/me tiene prioridad sobre /v1/donations/{donationId}.
+  GetDonationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-get-donation
+      Description: GET /v1/donations/{donationId} (HU-07, decisión D1)
+      CodeUri: ../backend/dist/donations
+      Handler: handlers.getDonation
+      Role: !GetAtt GetDonationRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref GetDonationLogGroup
+      Environment:
+        Variables:
+          DONATIONS_TABLE: !Ref DonationsTable
+      Events:
+        GetDonation:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: GET
+            Path: /v1/donations/{donationId}
+            Auth:
+              Authorizer: CognitoJwt
+              AuthorizationScopes: [api/donations.read]
+
 Outputs:
   ApiUrl:
     Description: URL base del API (baseUrl del entorno de Postman y VITE_API_BASE_URL).

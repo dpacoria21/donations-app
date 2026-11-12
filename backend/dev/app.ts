@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { APIGatewayProxyEventV2, APIGatewayProxyEventV2WithJWTAuthorizer } from 'aws-lambda';
 import { SCOPES } from '../src/authz/identity.ts';
-import { getMyDonations } from '../src/donations/handlers.ts';
+import { createDonation, getDonation, getMyDonations } from '../src/donations/handlers.ts';
 import {
   createProject,
   getProject,
@@ -106,6 +106,21 @@ export const ROUTES: readonly Route[] = [
     pattern: /^\/v1\/donations\/me$/,
     auth: { scopes: [SCOPES.donationsRead] },
     handler: getMyDonations,
+  },
+  // Después de /me: como en HTTP API, la ruta estática gana a la que tiene parámetro.
+  {
+    method: 'GET',
+    routeKey: 'GET /v1/donations/{donationId}',
+    pattern: /^\/v1\/donations\/(?<donationId>[^/]+)$/,
+    auth: { scopes: [SCOPES.donationsRead] },
+    handler: getDonation,
+  },
+  {
+    method: 'POST',
+    routeKey: 'POST /v1/donations',
+    pattern: /^\/v1\/donations$/,
+    auth: { scopes: [SCOPES.donationsWrite] },
+    handler: createDonation,
   },
 ];
 

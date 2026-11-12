@@ -209,3 +209,55 @@ describe('rutas de gestión en el servidor local (T03)', () => {
     expect(response.status).toBe(413);
   });
 });
+
+describe('donaciones en el servidor local (cabecera Idempotency-Key)', () => {
+  const server = createDevServer({
+    verifyToken: () =>
+      Promise.resolve({
+        sub: 'b1f0c2d3-0000-4000-8000-0000000000dd',
+        token_use: 'access',
+        scope: 'openid api/donations.write api/donations.read',
+        'cognito:groups': ['DONANTE'],
+      }),
+  });
+  let url = '';
+
+  beforeAll(async () => {
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    url = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  const donate = (key: string, amountCents: number) =>
+    fetch(`${url}/v1/donations`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer token',
+        'content-type': 'application/json',
+        'Idempotency-Key': key,
+      },
+      body: JSON.stringify({ projectId: '7a91d0c4-2e5f-4b38-a6c7-1d9e8f2b4a63', amountCents }),
+    });
+
+  it('la cabecera llega al handler: crear, repetir y cambiar el cuerpo (T05, T06, T07)', async () => {
+    const key = '3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f';
+    const first = await donate(key, 1_000);
+    const again = await donate(key, 1_000);
+    const changed = await donate(key, 2_000);
+
+    expect([first.status, again.status, changed.status]).toEqual([201, 201, 409]);
+    expect(again.headers.get('idempotency-replayed')).toBe('true');
+    const created = (await first.json()) as { donationId: string };
+    expect(((await again.json()) as { donationId: string }).donationId).toBe(created.donationId);
+
+    const detail = await fetch(`${url}/v1/donations/${created.donationId}`, {
+      headers: { authorization: 'Bearer token' },
+    });
+    expect(detail.status).toBe(200);
+  });
+});
