@@ -93,7 +93,7 @@ flowchart LR
 | --- | ------------------------------------------------------- | ------ | -------------------------------------------------------------------------------- | -------------- | ------ |
 | S1  | Token forjado, alterado, caducado o de otro user pool   | TB3    | JWT authorizer: firma (JWKS), `iss`, `exp` y `client_id`                         | T11, CA-NF02.1 | ⬜ F2  |
 | S2  | Usar un ID token como si fuera un access token          | TB3    | `AuthorizationScopes` en cada ruta protegida; el ID token no tiene scopes        | T11, D4        | ⬜ F2  |
-| S3  | Contraseña robada de un GESTOR o AUDITOR                | TB2    | MFA TOTP obligatorio en roles privilegiados (no SMS)                             | T14, CA-11.2   | ⬜ F5  |
+| S3  | Contraseña robada de un GESTOR o AUDITOR                | TB2    | MFA TOTP obligatorio en roles privilegiados (no SMS)                             | T14, CA-11.2   | ✅ F5  |
 | S4  | Interceptar el código de autorización en la redirección | TB2    | PKCE, cliente público sin secreto, URLs de callback exactas, sin flujo implícito | Config. SAM    | ⬜ F2  |
 | S5  | Credenciales AWS de un integrante robadas o compartidas | TB6    | Sin root, MFA por integrante, credenciales temporales (`aws login`)              | CA-NF03.3      | ⬜ F0  |
 
@@ -102,9 +102,9 @@ flowchart LR
 | ID  | Amenaza                                                          | Límite | Control                                                                                 | Evidencia      | Estado |
 | --- | ---------------------------------------------------------------- | ------ | --------------------------------------------------------------------------------------- | -------------- | ------ |
 | T1  | El navegador envía `donorSub`, rol, estado o un monto manipulado | TB4    | Backend autoritativo: `sub` del authorizer, Zod, `amountCents` entero y acotado         | T04, CA-NF02.2 | ✅ F4  |
-| T2  | Confirmaciones concurrentes cuentan dos veces la misma donación  | TB5    | `TransactWriteItems` con condición `status = PENDIENTE_SIMULACION` y `donorSub = :sub`  | T08, CA-NF04.1 | ⬜ F5  |
+| T2  | Confirmaciones concurrentes cuentan dos veces la misma donación  | TB5    | `TransactWriteItems` con condición `status = PENDIENTE_SIMULACION` y `donorSub = :sub`  | T08, CA-NF04.1 | ✅ F5  |
 | T3  | Reintentos o doble clic crean donaciones duplicadas              | TB4    | `Idempotency-Key` + `payloadHash` en la misma transacción que la donación (AD-05)       | T06, T07       | ✅ F4  |
-| T4  | Alterar la SPA publicada                                         | TB1    | Bucket privado con OAC; publicación solo desde la plantilla o el procedimiento revisado | CA-NF11.2      | ⬜ F5  |
+| T4  | Alterar la SPA publicada                                         | TB1    | Bucket privado con OAC; publicación solo desde la plantilla o el procedimiento revisado | CA-NF11.2      | ✅ F5  |
 | T5  | Dependencia npm comprometida o vulnerable                        | TB6    | `package-lock.json` con versiones exactas, `npm ci`, `npm audit` en CI, Dependabot      | CI             | ✅ F1  |
 
 ### Repudio (Repudiation)
@@ -123,7 +123,7 @@ flowchart LR
 | I2  | Ver proyectos en BORRADOR desde el catálogo público       | TB4    | Solo `PUBLICADO`; 404 uniforme para inexistente, inválido o borrador            | T01, CA-02.2    | ✅ F1 (memoria) |
 | I3  | Errores que revelan trazas, nombres de tablas o internos  | TB4    | Formato `{ code, message, requestId }`; 500 genérico                            | Tests backend   | ✅ F1           |
 | I4  | Tokens o datos personales en logs                         | TB5    | El logger no registra cabeceras, body ni claims; solo metadatos de la solicitud | CA-NF01.2       | 🟡 F1           |
-| I5  | XSS que roba tokens                                       | TB1    | Tokens en memoria, CSP restrictiva, React sin `dangerouslySetInnerHTML`         | CA-NF11.1, 11.2 | ⬜ F2/F5        |
+| I5  | XSS que roba tokens                                       | TB1    | Tokens en memoria, CSP restrictiva, React sin `dangerouslySetInnerHTML`         | CA-NF11.1, 11.2 | ✅ F5           |
 | I6  | Secretos en el repositorio o en el bundle de la SPA       | TB6    | `.env` ignorado, variables `VITE_*` solo públicas, secret scanning de GitHub    | Repo limpio     | 🟡 F0           |
 | I7  | Las estadísticas exponen donantes o importes individuales | TB4    | Solo cifras agregadas del monto confirmado                                      | CA-09.2         | ✅ F1 (memoria) |
 
@@ -142,7 +142,7 @@ flowchart LR
 | E1  | Un DONANTE llama a rutas de GESTOR (crear o publicar)                      | TB4    | RBAC por `cognito:groups` en `authz`, además del scope                                    | T03             | 🟡 F1 (unit) / F3 |
 | E2  | Un usuario se asigna a sí mismo un grupo privilegiado                      | TB2    | Grupos solo por administrador; sin atributos de rol editables por el usuario              | Config. Cognito | ⬜ F2             |
 | E3  | Una Lambda comprometida escribe en tablas que no le tocan                  | TB5    | Un rol por función con acciones y ARNs concretos; sin `*` injustificado                   | T10, CA-NF03.1  | ⬜ F2/F6          |
-| E4  | Usar la simulación de pago fuera del entorno académico                     | TB4    | La ruta `simulate` solo existe en el stage `academic`                                     | Config. SAM     | ⬜ F5             |
+| E4  | Usar la simulación de pago fuera del entorno académico                     | TB4    | La ruta `simulate` solo existe en el stage `academic`                                     | Config. SAM     | ✅ F5             |
 | E5  | Un asistente de IA propone políticas con comodines o actúa sobre la cuenta | TB6    | Reglas de design.md §10: PR revisado por otro integrante, sin despliegues sin supervisión | AI_USAGE.md     | 🟡 F0             |
 
 ## 6. Relación con NIST SP 800-207

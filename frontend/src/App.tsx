@@ -73,6 +73,14 @@ export function App() {
           </Routes>
         </Suspense>
       </main>
+      <footer className="border-t border-slate-200 px-4 py-4 text-xs text-slate-600">
+        <p className="mx-auto max-w-3xl">
+          Prototipo académico (Tópicos Avanzados en Ingeniería de Software, EPIS-UNSA). Los
+          proyectos y las personas son ficticios y no se procesan pagos reales. Un despliegue real
+          exigiría una evaluación legal según la Ley N.º 29733 de Protección de Datos Personales,
+          además de revisar privacidad, retención de datos y la normativa de donaciones.
+        </p>
+      </footer>
     </div>
   );
 }

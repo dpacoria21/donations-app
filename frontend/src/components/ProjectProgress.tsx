@@ -7,7 +7,11 @@ interface ProjectProgressProps {
   percent?: number;
 }
 
-/** Barra accesible con el monto confirmado (simulado) frente a la meta, en PEN (CA-09.1). */
+/**
+ * Avance del monto confirmado (simulado) frente a la meta, en PEN (CA-09.1). Usa `<progress>`
+ * nativo: es accesible sin roles extra y no necesita estilos en línea, que la CSP de
+ * CloudFront bloquea (`style-src 'self'`, CA-NF11.2).
+ */
 export function ProjectProgress({
   confirmedAmountCents,
   goalAmountCents,
@@ -16,20 +20,14 @@ export function ProjectProgress({
   const label = `${formatPen(confirmedAmountCents)} de ${formatPen(goalAmountCents)}`;
   return (
     <div className="mt-3">
-      <div
-        role="progressbar"
+      <progress
+        max={100}
+        value={percent}
         aria-label="Avance de la meta"
-        aria-valuemin={0}
-        aria-valuemax={100}
         aria-valuenow={percent}
         aria-valuetext={`${String(percent)} %: ${label}`}
-        className="h-2 w-full overflow-hidden rounded-full bg-slate-200"
-      >
-        <div
-          className="h-full rounded-full bg-emerald-600"
-          style={{ width: `${String(percent)}%` }}
-        />
-      </div>
+        className="h-2 w-full appearance-none overflow-hidden rounded-full bg-slate-200 [&::-moz-progress-bar]:bg-emerald-600 [&::-webkit-progress-bar]:bg-slate-200 [&::-webkit-progress-value]:bg-emerald-600"
+      />
       <p className="mt-1 text-sm text-slate-700">
         <span className="font-semibold">{formatPen(confirmedAmountCents)}</span> recaudados de{' '}
         {formatPen(goalAmountCents)} ({percent} %)

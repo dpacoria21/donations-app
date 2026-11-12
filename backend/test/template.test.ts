@@ -287,7 +287,11 @@ describe('infra/template.yaml: HTTP API', () => {
 
   it('admite CORS solo de los orígenes configurados', () => {
     const cors = api.CorsConfiguration as { AllowOrigins: unknown; AllowHeaders: string[] };
-    expect(cors.AllowOrigins).toEqual({ Ref: 'AllowedOrigins' });
+    // Los orígenes del parámetro más la SPA publicada; nunca '*'.
+    const origins = JSON.stringify(cors.AllowOrigins);
+    expect(origins).toContain('{"Ref":"AllowedOrigins"}');
+    expect(origins).toContain('https://${SpaDistribution.DomainName}');
+    expect(origins).not.toContain('"*"');
     expect(cors.AllowHeaders).toEqual(['authorization', 'content-type', 'idempotency-key']);
   });
 
@@ -465,5 +469,88 @@ describe('infra/template.yaml: MFA obligatorio para GESTOR y AUDITOR (HU-11, D5)
     expect(pool.UserAttributeUpdateSettings).toEqual({
       AttributesRequireVerificationBeforeUpdate: ['email'],
     });
+  });
+});
+
+describe('infra/template.yaml: publicación del frontend (CA-NF01.1, CA-NF11.2)', () => {
+  const distribution = resource('SpaDistribution').Properties.DistributionConfig as {
+    DefaultRootObject: string;
+    Origins: { OriginAccessControlId: unknown; S3OriginConfig: { OriginAccessIdentity: string } }[];
+    DefaultCacheBehavior: { ViewerProtocolPolicy: string; ResponseHeadersPolicyId: unknown };
+  };
+  const headers = (
+    resource('SpaSecurityHeaders').Properties.ResponseHeadersPolicyConfig as {
+      SecurityHeadersConfig: Record<string, Record<string, unknown>>;
+    }
+  ).SecurityHeadersConfig;
+
+  it('el bucket bloquea todo acceso público y cifra en reposo', () => {
+    const bucket = resource('SpaBucket').Properties;
+    expect(bucket.PublicAccessBlockConfiguration).toEqual({
+      BlockPublicAcls: true,
+      BlockPublicPolicy: true,
+      IgnorePublicAcls: true,
+      RestrictPublicBuckets: true,
+    });
+    expect(JSON.stringify(bucket.BucketEncryption)).toContain('AES256');
+  });
+
+  it('solo esta distribución lee el bucket (OAC) y se rechaza HTTP sin TLS', () => {
+    const statements = (
+      resource('SpaBucketPolicy').Properties.PolicyDocument as {
+        Statement: { Effect: string; Principal: unknown; Action: string; Condition: unknown }[];
+      }
+    ).Statement;
+    expect(statements[0]).toMatchObject({
+      Effect: 'Allow',
+      Principal: { Service: 'cloudfront.amazonaws.com' },
+      Action: 's3:GetObject',
+    });
+    expect(JSON.stringify(statements[0]?.Condition)).toContain('distribution/${SpaDistribution}');
+    expect(statements[1]).toMatchObject({
+      Effect: 'Deny',
+      Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+    });
+    expect(distribution.Origins[0]?.OriginAccessControlId).toEqual({
+      'Fn::GetAtt': 'SpaOriginAccessControl.Id',
+    });
+  });
+
+  it('CloudFront redirige a HTTPS y aplica la política de cabeceras', () => {
+    expect(distribution.DefaultCacheBehavior.ViewerProtocolPolicy).toBe('redirect-to-https');
+    expect(distribution.DefaultCacheBehavior.ResponseHeadersPolicyId).toEqual({
+      Ref: 'SpaSecurityHeaders',
+    });
+  });
+
+  it('CSP restrictiva: sin scripts ni estilos en línea, sin frames y sin objetos', () => {
+    const csp = JSON.stringify(headers.ContentSecurityPolicy);
+    for (const directive of [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self'",
+      "object-src 'none'",
+      "frame-ancestors 'none'",
+    ]) {
+      expect(csp).toContain(directive);
+    }
+    expect(csp).not.toContain('unsafe-inline');
+    expect(csp).not.toContain('unsafe-eval');
+  });
+
+  it('HSTS de un año, nosniff y Referrer-Policy', () => {
+    expect(headers.StrictTransportSecurity).toMatchObject({ AccessControlMaxAgeSec: 31536000 });
+    expect(headers.ContentTypeOptions).toEqual({ Override: true });
+    expect(headers.ReferrerPolicy).toMatchObject({
+      ReferrerPolicy: 'strict-origin-when-cross-origin',
+    });
+  });
+
+  it('el login vuelve a la SPA publicada', () => {
+    const client = resource('WebClient').Properties;
+    expect(JSON.stringify(client.CallbackURLs)).toContain(
+      'https://${SpaDistribution.DomainName}/auth/callback',
+    );
+    expect(JSON.stringify(client.LogoutURLs)).toContain('https://${SpaDistribution.DomainName}/');
   });
 });

@@ -258,8 +258,21 @@ Resources:
         - api/donations.write
         - api/donations.read
         - api/audit.read
-      CallbackURLs: !Ref CallbackUrls
-      LogoutURLs: !Ref LogoutUrls
+      # Las URLs del parámetro (local y Postman) más las de la SPA publicada en CloudFront.
+      CallbackURLs:
+        Fn::Split:
+          - ","
+          - Fn::Join:
+              - ","
+              - - Fn::Join: [",", { Ref: CallbackUrls }]
+                - !Sub https://${SpaDistribution.DomainName}/auth/callback
+      LogoutURLs:
+        Fn::Split:
+          - ","
+          - Fn::Join:
+              - ","
+              - - Fn::Join: [",", { Ref: LogoutUrls }]
+                - !Sub https://${SpaDistribution.DomainName}/
       SupportedIdentityProviders: [COGNITO]
       # Sin flujos de contraseña directos: el login pasa siempre por managed login.
       ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH]
@@ -388,7 +401,14 @@ Resources:
               audience:
                 - !Ref WebClient
       CorsConfiguration:
-        AllowOrigins: !Ref AllowedOrigins
+        # Los orígenes del parámetro (desarrollo local) más la SPA publicada en CloudFront.
+        AllowOrigins:
+          Fn::Split:
+            - ","
+            - Fn::Join:
+                - ","
+                - - Fn::Join: [",", { Ref: AllowedOrigins }]
+                  - !Sub https://${SpaDistribution.DomainName}
         AllowMethods: [GET, POST, PATCH, OPTIONS]
         AllowHeaders: [authorization, content-type, idempotency-key]
         MaxAge: 600
@@ -1136,7 +1156,140 @@ Resources:
               Authorizer: CognitoJwt
               AuthorizationScopes: [api/donations.write]
 
+  # ---------------------------------------------------------------------------------------
+  # Publicación del frontend: S3 privado + CloudFront con OAC, solo HTTPS (CA-NF01.1) y
+  # cabeceras de seguridad (CA-NF11.2). CloudFront es global; S3 queda en esta Región.
+  # ---------------------------------------------------------------------------------------
+  SpaBucket:
+    Type: AWS::S3::Bucket
+    # Para `sam delete` hay que vaciarlo antes (ver backend/README.md).
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  SpaOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub ${AWS::StackName}-spa-oac
+        Description: CloudFront firma cada lectura del bucket; el bucket no es público.
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Solo esta distribución puede leer los archivos de la SPA.
+  SpaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SpaBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub ${SpaBucket.Arn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${SpaDistribution}
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt SpaBucket.Arn
+              - !Sub ${SpaBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # CSP restrictiva (CA-NF11.2): solo scripts y estilos propios, sin estilos ni scripts en
+  # línea. connect-src admite el API (execute-api de esta Región: el ID exacto crearía una
+  # dependencia circular con CloudFront) y los endpoints de Cognito para el login.
+  SpaSecurityHeaders:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub ${AWS::StackName}-security-headers
+        Comment: CSP, HSTS, nosniff, Referrer-Policy y anti-clickjacking para la SPA.
+        SecurityHeadersConfig:
+          ContentSecurityPolicy:
+            Override: true
+            ContentSecurityPolicy: !Sub "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://*.execute-api.${AWS::Region}.amazonaws.com https://cognito-idp.${AWS::Region}.amazonaws.com https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
+          StrictTransportSecurity:
+            Override: true
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+          ContentTypeOptions:
+            Override: true
+          ReferrerPolicy:
+            Override: true
+            ReferrerPolicy: strict-origin-when-cross-origin
+          FrameOptions:
+            Override: true
+            FrameOption: DENY
+
+  SpaDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub ${AWS::StackName} SPA
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        # Solo Norteamérica y Europa: la clase más barata (suficiente para la demo).
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: spa-bucket
+            DomainName: !GetAtt SpaBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt SpaOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: spa-bucket
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          Compress: true
+          # Política administrada CachingOptimized.
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId: !Ref SpaSecurityHeaders
+        # Rutas de la SPA (/cuenta, /gestion…): S3 responde 403/404 y se sirve index.html.
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
 Outputs:
+  SpaUrl:
+    Description: URL pública HTTPS de la SPA (CloudFront).
+    Value: !Sub https://${SpaDistribution.DomainName}
+  SpaBucketName:
+    Description: Bucket privado donde se suben los archivos de frontend/dist.
+    Value: !Ref SpaBucket
+  SpaDistributionId:
+    Description: ID de la distribución, para invalidar la caché tras publicar.
+    Value: !Ref SpaDistribution
   ApiUrl:
     Description: URL base del API (baseUrl del entorno de Postman y VITE_API_BASE_URL).
     Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}
