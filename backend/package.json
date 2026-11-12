@@ -21,15 +21,25 @@
     "check": "npm run lint && npm run lint:api && npm run format:check && npm run typecheck && npm run test && npm run build",
     "seed:projects": "node --env-file-if-exists=.env scripts/seed-projects.ts",
     "evidence:t08": "node scripts/t08-concurrency.ts",
+    "evidence:iam": "node scripts/iam-evidence.ts",
+    "evidence:observability": "node scripts/observability-evidence.ts",
+    "evidence:perf": "node scripts/perf.ts",
     "setup:mfa": "node --env-file-if-exists=.env scripts/setup-mfa.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "3.1167.0",
     "@aws-sdk/client-dynamodb": "3.1167.0",
+    "@aws-sdk/client-verifiedpermissions": "3.1167.0",
     "@aws-sdk/lib-dynamodb": "3.1167.0",
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@aws-sdk/client-accessanalyzer": "3.1167.0",
+    "@aws-sdk/client-cloudformation": "3.1167.0",
+    "@aws-sdk/client-cloudtrail": "3.1167.0",
+    "@aws-sdk/client-cloudwatch-logs": "3.1167.0",
+    "@aws-sdk/client-iam": "3.1167.0",
+    "@cedar-policy/cedar-wasm": "4.14.0",
     "@eslint/js": "10.0.1",
     "@redocly/cli": "2.77.0",
     "@types/aws-lambda": "8.10.164",

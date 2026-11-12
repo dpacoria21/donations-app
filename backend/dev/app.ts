@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { APIGatewayProxyEventV2, APIGatewayProxyEventV2WithJWTAuthorizer } from 'aws-lambda';
+import { listAuditEvents } from '../src/audit/handlers.ts';
 import { SCOPES } from '../src/authz/identity.ts';
 import {
   createDonation,
@@ -133,6 +134,13 @@ export const ROUTES: readonly Route[] = [
     pattern: /^\/v1\/donations$/,
     auth: { scopes: [SCOPES.donationsWrite] },
     handler: createDonation,
+  },
+  {
+    method: 'GET',
+    routeKey: 'GET /v1/audit',
+    pattern: /^\/v1\/audit$/,
+    auth: { scopes: [SCOPES.auditRead] },
+    handler: listAuditEvents,
   },
 ];
 

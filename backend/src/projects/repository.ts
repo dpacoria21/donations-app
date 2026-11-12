@@ -7,7 +7,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { z } from 'zod';
 import type { AuditEvent } from '../audit/model.ts';
-import { InMemoryAuditLog } from '../audit/recorder.ts';
+import { InMemoryAuditLog, localAuditLog } from '../audit/recorder.ts';
 import { PROJECT_STATUSES, type Project, type ProjectStatus } from './model.ts';
 import type { UpdateProjectInput } from './schemas.ts';
 import { SEED_PROJECTS } from './seed.ts';
@@ -346,7 +346,7 @@ export function createProjectRepository(env: NodeJS.ProcessEnv = process.env): P
   if (env.AWS_LAMBDA_FUNCTION_NAME) {
     throw new Error('Falta la variable de entorno PROJECTS_TABLE');
   }
-  return new InMemoryProjectRepository(SEED_PROJECTS);
+  return new InMemoryProjectRepository(SEED_PROJECTS, localAuditLog);
 }
 
 let defaultRepository: ProjectRepository | undefined;

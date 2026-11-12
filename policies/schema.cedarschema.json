@@ -1,0 +1,94 @@
+{
+  "Donations": {
+    "entityTypes": {
+      "User": {
+        "memberOfTypes": ["Role"]
+      },
+      "Role": {},
+      "Platform": {},
+      "Project": {},
+      "Donation": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "owner": { "type": "Entity", "name": "User", "required": true }
+          }
+        }
+      }
+    },
+    "actions": {
+      "ListManagedProjects": {
+        "appliesTo": {
+          "principalTypes": ["User"],
+          "resourceTypes": ["Platform"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "scopes": { "type": "Set", "element": { "type": "String" }, "required": true }
+            }
+          }
+        }
+      },
+      "CreateProject": {
+        "appliesTo": {
+          "principalTypes": ["User"],
+          "resourceTypes": ["Platform"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "scopes": { "type": "Set", "element": { "type": "String" }, "required": true }
+            }
+          }
+        }
+      },
+      "UpdateProject": {
+        "appliesTo": {
+          "principalTypes": ["User"],
+          "resourceTypes": ["Project"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "scopes": { "type": "Set", "element": { "type": "String" }, "required": true }
+            }
+          }
+        }
+      },
+      "PublishProject": {
+        "appliesTo": {
+          "principalTypes": ["User"],
+          "resourceTypes": ["Project"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "scopes": { "type": "Set", "element": { "type": "String" }, "required": true }
+            }
+          }
+        }
+      },
+      "ReadOwnDonations": {
+        "appliesTo": {
+          "principalTypes": ["User"],
+          "resourceTypes": ["Platform"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "scopes": { "type": "Set", "element": { "type": "String" }, "required": true }
+            }
+          }
+        }
+      },
+      "ReadDonation": {
+        "appliesTo": {
+          "principalTypes": ["User"],
+          "resourceTypes": ["Donation"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "scopes": { "type": "Set", "element": { "type": "String" }, "required": true }
+            }
+          }
+        }
+      }
+    }
+  }
+}

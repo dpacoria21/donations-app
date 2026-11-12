@@ -7,7 +7,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { z } from 'zod';
 import type { AuditEvent } from '../audit/model.ts';
-import { InMemoryAuditLog } from '../audit/recorder.ts';
+import { InMemoryAuditLog, localAuditLog } from '../audit/recorder.ts';
 import type { ProjectStatus } from '../projects/model.ts';
 import { DONATION_STATUSES, type Donation } from './model.ts';
 import type { SimulationOutcome } from './schemas.ts';
@@ -387,7 +387,7 @@ export function createDonationRepository(
   if (env.AWS_LAMBDA_FUNCTION_NAME) {
     throw new Error('Falta la variable de entorno DONATIONS_TABLE');
   }
-  return new InMemoryDonationRepository([], inMemory);
+  return new InMemoryDonationRepository([], { auditLog: localAuditLog, ...inMemory });
 }
 
 let defaultRepository: DonationRepository | undefined;
