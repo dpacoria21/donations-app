@@ -128,18 +128,27 @@ con la sesión del propietario y bajo su supervisión (design.md §10; ver `AI_U
 
 ### Infraestructura (AWS SAM, `infra/template.yaml`)
 
-- [ ] HTTP API con el stage `academic`, throttling, logs de acceso y una retención de logs de
-      14 días como máximo (CA-NF07.1, design.md §6.2).
-- [ ] Tablas DynamoDB en modo on-demand (design.md §5):
-  - [ ] `Projects`: PK `projectId`, GSI `status-createdAt`.
-  - [ ] `Donations`: PK `donationId`, GSI `donorSub-createdAt`.
-  - [ ] `Idempotency`: PK `donorSub#createDonation#idempotencyKey`, TTL `expiresAt` de 24 h.
-  - [ ] `AuditEvents`: PK `eventType`, SK `timestamp#eventId`.
-- [ ] Un rol IAM por función Lambda, con solo las acciones y tablas que necesita. Sin
-      `Action: "*"` ni `Resource: "*"` injustificados (CA-NF03.1, CA-NF03.2).
-- [ ] Repositorio DynamoDB de proyectos que reemplace al de memoria sin cambiar los handlers.
-- [ ] Primer `sam deploy` en la Región seleccionada y comprobar los endpoints públicos por HTTPS
-      (CA-NF01.1).
+Parte 1 de la fase: la plantilla está escrita y validada (`sam validate --lint`) y la prueban
+`backend/test/template.test.ts` y `backend/test/projects-dynamo.test.ts`. Falta desplegarla.
+
+- [x] HTTP API con el stage `academic`, throttling (10 rps, ráfaga de 20), CORS por lista de
+      orígenes y access logs sin IP ni cabeceras. Todos los log groups tienen una retención de
+      14 días como máximo (CA-NF07.1, CA-NF01.2, design.md §6.2).
+- [x] Tablas DynamoDB en modo on-demand, que se borran con la pila (design.md §5):
+  - [x] `Projects`: PK `projectId`, GSI `status-createdAt`.
+  - [x] `Donations`: PK `donationId`, GSI `donorSub-createdAt`.
+  - [x] `Idempotency`: PK `pk` (`donorSub#createDonation#idempotencyKey`), TTL `expiresAt`.
+  - [x] `AuditEvents`: PK `eventType`, SK `sk` (`timestamp#eventId`).
+- [x] Un rol IAM explícito por función Lambda, con una sola acción de DynamoDB sobre su tabla o
+      índice y escritura solo en su propio log group. No se usa `AWSLambdaBasicExecutionRole`
+      porque concede logs sobre `Resource: "*"` (CA-NF03.1, CA-NF03.2).
+- [x] Repositorio DynamoDB de proyectos (`Query` sobre el GSI y `GetItem`), que valida con Zod
+      lo que lee. Se activa con `PROJECTS_TABLE`; en Lambda, si falta, la función falla en vez
+      de servir datos ficticios.
+- [x] `npm run build` empaqueta los handlers con esbuild (ESM, minificado, con el AWS SDK
+      dentro) y `npm run seed:projects` carga los proyectos de prueba en la tabla.
+- [ ] Primer `sam deploy` (lo ejecuta una persona del equipo), `npm run seed:projects` y
+      comprobar los endpoints públicos por HTTPS con Postman (CA-NF01.1).
 
 ### Identidad (Cognito): HU-03, HU-04 y HU-11
 

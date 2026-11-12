@@ -1,8 +1,9 @@
 # backend
 
 API de la Plataforma de Donaciones Seguras: handlers **AWS Lambda (Node.js 24, TypeScript)**
-detrás de **API Gateway HTTP API**, según [design.md](../design.md). Esta primera versión
-solo incluye el esqueleto y los endpoints públicos de proyectos, con datos de prueba en memoria.
+detrás de **API Gateway HTTP API**, según [design.md](../design.md). Por ahora incluye los
+endpoints públicos de proyectos, que leen de DynamoDB en AWS y de datos de prueba en memoria en
+local. La infraestructura está en [infra/template.yaml](../infra/template.yaml) (AWS SAM).
 
 ## Requisitos
 
@@ -37,16 +38,17 @@ npm run dev          # API local en http://127.0.0.1:3000 (se reinicia al guarda
 npm run check        # lint + formato + typecheck + tests + build
 ```
 
-| Script                 | Qué hace                                                       |
-| ---------------------- | -------------------------------------------------------------- |
-| `npm run dev`          | Servidor local con recarga automática                          |
-| `npm start`            | Servidor local sin recarga                                     |
-| `npm run lint`         | ESLint con reglas estrictas de typescript-eslint               |
-| `npm run lint:api`     | Valida el contrato OpenAPI `../docs/api.yaml` con Redocly      |
-| `npm run format:check` | Comprueba el formato con Prettier (`npm run format` lo aplica) |
-| `npm run typecheck`    | `tsc --noEmit`                                                 |
-| `npm test`             | Pruebas con Vitest                                             |
-| `npm run build`        | Empaqueta los handlers con esbuild en `dist/`                  |
+| Script                  | Qué hace                                                       |
+| ----------------------- | -------------------------------------------------------------- |
+| `npm run dev`           | Servidor local con recarga automática                          |
+| `npm start`             | Servidor local sin recarga                                     |
+| `npm run lint`          | ESLint con reglas estrictas de typescript-eslint               |
+| `npm run lint:api`      | Valida el contrato OpenAPI `../docs/api.yaml` con Redocly      |
+| `npm run format:check`  | Comprueba el formato con Prettier (`npm run format` lo aplica) |
+| `npm run typecheck`     | `tsc --noEmit`                                                 |
+| `npm test`              | Pruebas con Vitest                                             |
+| `npm run build`         | Empaqueta los handlers con esbuild en `dist/<módulo>/`         |
+| `npm run seed:projects` | Carga los proyectos de prueba en la tabla `PROJECTS_TABLE`     |
 
 ## API local (solo desarrollo)
 
@@ -54,6 +56,36 @@ npm run check        # lint + formato + typecheck + tests + build
 (payload 2.0) e invoca **los mismos handlers Lambda** que se desplegarán. Solo responde JSON:
 no sirve páginas. Aplica CORS a los orígenes de `CORS_ALLOWED_ORIGINS`, igual que hará la
 `CorsConfiguration` de HTTP API, para que el frontend (`http://localhost:5173`) pueda llamarlo.
+
+Con `PROJECTS_TABLE` vacía usa los datos de prueba en memoria. Si se completa con el nombre de
+la tabla desplegada (y hay sesión de `aws login`), el API local lee de DynamoDB real.
+
+## Despliegue en AWS (lo ejecuta una persona del equipo)
+
+Los asistentes de IA no despliegan ni ejecutan comandos sobre la cuenta sin supervisión
+(design.md §10). Requisitos: AWS SAM CLI y una sesión con credenciales temporales.
+
+```bash
+aws login --region us-east-2 --profile donations-dev
+```
+
+1. Empaquetar los handlers: en `backend/`, `npm run build`.
+2. Validar y desplegar desde `infra/` (la configuración está en
+   [infra/samconfig.toml](../infra/samconfig.toml); SAM muestra el change set y pide
+   confirmación):
+
+   ```bash
+   cd ../infra && sam validate && sam deploy
+   ```
+
+   No ejecutar `sam build`: el código ya llega empaquetado por esbuild.
+
+3. Cargar los proyectos de prueba con el valor de la salida `ProjectsTableName`: copiarlo en
+   `PROJECTS_TABLE` de `.env` y ejecutar `npm run seed:projects`.
+4. Copiar la salida `ApiUrl` en el entorno de Postman
+   `postman/academic.postman_environment.json` y ejecutar la colección.
+
+Para eliminar todo: `cd infra && sam delete`. Las tablas y los log groups se borran con la pila.
 
 ## Pruebas con Postman
 
@@ -65,7 +97,8 @@ CA-09.1, CA-09.2) y un entorno local:
 2. Seleccionar el entorno **Donaciones Seguras — local** y levantar el API con `npm run dev`.
 3. Ejecutar la colección con **Run collection**.
 
-Cuando exista el stage desplegado, se añadirá otro entorno con su `baseUrl`.
+Para el stage desplegado está `academic.postman_environment.json`: reemplazar su `baseUrl`
+por la salida `ApiUrl` de la pila.
 
 ## Endpoints implementados
 
@@ -97,12 +130,12 @@ backend/
 │   ├── authz/      # identidad desde claims del JWT authorizer, RBAC por grupo
 │   └── shared/     # errores, respuestas HTTP y logger JSON
 ├── dev/            # API local para Postman y el frontend (no se despliega)
-├── postman/        # colección y entorno de Postman
-└── test/           # pruebas Vitest
+├── scripts/        # build con esbuild y carga de datos de prueba
+├── postman/        # colección y entornos de Postman (local y academic)
+└── test/           # pruebas Vitest, incluida la revisión de infra/template.yaml
 ```
 
 ## Pendiente
 
-- Repositorio DynamoDB y plantilla SAM (`infra/template.yaml`) con un rol IAM por función.
 - Cognito (PKCE, grupos, MFA TOTP) y rutas protegidas con scopes.
 - Módulos `donations` (intención, idempotencia, simulación, historial) y `audit`.

@@ -16,9 +16,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "esbuild src/projects/handlers.ts --bundle --platform=node --target=node24 --format=esm --sourcemap --outdir=dist/projects --out-extension:.js=.mjs",
+    "build": "node scripts/build.ts",
     "lint:api": "redocly lint ../docs/api.yaml",
-    "check": "npm run lint && npm run lint:api && npm run format:check && npm run typecheck && npm run test && npm run build"
+    "check": "npm run lint && npm run lint:api && npm run format:check && npm run typecheck && npm run test && npm run build",
+    "seed:projects": "node --env-file-if-exists=.env scripts/seed-projects.ts"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "3.1167.0",
@@ -30,6 +31,7 @@
     "@redocly/cli": "2.77.0",
     "@types/aws-lambda": "8.10.164",
     "@types/node": "24.19.2",
+    "aws-sdk-client-mock": "4.1.0",
     "esbuild": "0.28.2",
     "eslint": "10.14.0",
     "globals": "17.14.0",

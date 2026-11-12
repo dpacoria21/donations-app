@@ -1,0 +1,343 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  Plataforma de Donaciones Seguras, stage académico (design.md). Fase 2, parte 1: tablas
+  DynamoDB, funciones Lambda de proyectos con un rol IAM por función y HTTP API con
+  throttling, CORS y access logs. Todo en una sola Región (us-east-2) y eliminable con
+  `sam delete`.
+
+# Convención: las funciones intrínsecas se escriben en forma corta y escalar (!Ref, !GetAtt,
+# !Sub con texto). test/template.test.ts depende de ello para analizar la plantilla.
+
+Parameters:
+  StageName:
+    Type: String
+    Default: academic
+    AllowedValues: [academic]
+    Description: Stage de API Gateway. La simulación de pagos solo existe en `academic`.
+  AllowedOrigins:
+    Type: CommaDelimitedList
+    Default: http://localhost:5173
+    Description: Orígenes del frontend admitidos por CORS (sin barra final).
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    AllowedValues: [1, 3, 5, 7, 14]
+    Description: Retención de CloudWatch Logs; como máximo 14 días (CA-NF07.1).
+
+Globals:
+  Function:
+    Runtime: nodejs24.x
+    Architectures: [arm64]
+    MemorySize: 256
+    Timeout: 10
+    Environment:
+      Variables:
+        NODE_OPTIONS: --enable-source-maps
+        STAGE: !Ref StageName
+
+Resources:
+  # ---------------------------------------------------------------------------------------
+  # DynamoDB (design.md §5). On-demand: sin costo fijo cuando no hay tráfico.
+  # Cifrado en reposo con la llave propiedad de AWS (sin costo adicional).
+  # ---------------------------------------------------------------------------------------
+  ProjectsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: projectId
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+        - AttributeName: createdAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: projectId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: status-createdAt
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: createdAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  DonationsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: donationId
+          AttributeType: S
+        - AttributeName: donorSub
+          AttributeType: S
+        - AttributeName: createdAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: donationId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: donorSub-createdAt
+          KeySchema:
+            - AttributeName: donorSub
+              KeyType: HASH
+            - AttributeName: createdAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # PK `donorSub#createDonation#idempotencyKey`; los registros caducan a las 24 h (TTL).
+  IdempotencyTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+
+  # PK `eventType`, SK `timestamp#eventId` para filtrar por tipo y fecha (HU-10).
+  AuditEventsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: eventType
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: eventType
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+
+  # ---------------------------------------------------------------------------------------
+  # HTTP API (PEP). Throttling por stage, CORS por lista y access logs sin IP ni tokens.
+  # ---------------------------------------------------------------------------------------
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref StageName
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 10
+      AccessLogSettings:
+        DestinationArn: !GetAtt HttpApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","time":"$context.requestTime","routeKey":"$context.routeKey","status":"$context.status","latencyMs":"$context.responseLatency","integrationError":"$context.integrationErrorMessage","authorizerError":"$context.authorizer.error"}'
+      CorsConfiguration:
+        AllowOrigins: !Ref AllowedOrigins
+        AllowMethods: [GET, POST, PATCH, OPTIONS]
+        AllowHeaders: [authorization, content-type, idempotency-key]
+        MaxAge: 600
+
+  HttpApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/apigateway/${AWS::StackName}-http-api
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ---------------------------------------------------------------------------------------
+  # Funciones de proyectos (lectura pública). Cada una tiene su propio rol con una sola
+  # acción de DynamoDB y permiso de escritura solo en su propio log group (CA-NF03.1).
+  # No se usa AWSLambdaBasicExecutionRole porque concede logs sobre Resource "*".
+  # ---------------------------------------------------------------------------------------
+  ListProjectsLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-list-projects
+      RetentionInDays: !Ref LogRetentionDays
+
+  ListProjectsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: GET /v1/projects. Solo Query sobre el GSI status-createdAt de Projects.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt ListProjectsLogGroup.Arn
+        - PolicyName: query-published-projects
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:Query]
+                Resource: !Sub ${ProjectsTable.Arn}/index/status-createdAt
+
+  ListProjectsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-list-projects
+      Description: GET /v1/projects (HU-01)
+      CodeUri: ../backend/dist/projects
+      Handler: handlers.listProjects
+      Role: !GetAtt ListProjectsRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref ListProjectsLogGroup
+      Environment:
+        Variables:
+          PROJECTS_TABLE: !Ref ProjectsTable
+      Events:
+        ListProjects:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: GET
+            Path: /v1/projects
+
+  GetProjectLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-get-project
+      RetentionInDays: !Ref LogRetentionDays
+
+  GetProjectRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: GET /v1/projects/{projectId}. Solo GetItem sobre Projects.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt GetProjectLogGroup.Arn
+        - PolicyName: get-project
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:GetItem]
+                Resource: !GetAtt ProjectsTable.Arn
+
+  GetProjectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-get-project
+      Description: GET /v1/projects/{projectId} (HU-02)
+      CodeUri: ../backend/dist/projects
+      Handler: handlers.getProject
+      Role: !GetAtt GetProjectRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref GetProjectLogGroup
+      Environment:
+        Variables:
+          PROJECTS_TABLE: !Ref ProjectsTable
+      Events:
+        GetProject:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: GET
+            Path: /v1/projects/{projectId}
+
+  GetProjectStatsLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-get-project-stats
+      RetentionInDays: !Ref LogRetentionDays
+
+  GetProjectStatsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: GET /v1/projects/{projectId}/stats. Solo GetItem sobre Projects.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt GetProjectStatsLogGroup.Arn
+        - PolicyName: get-project
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:GetItem]
+                Resource: !GetAtt ProjectsTable.Arn
+
+  GetProjectStatsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-get-project-stats
+      Description: GET /v1/projects/{projectId}/stats (HU-09)
+      CodeUri: ../backend/dist/projects
+      Handler: handlers.getProjectStats
+      Role: !GetAtt GetProjectStatsRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref GetProjectStatsLogGroup
+      Environment:
+        Variables:
+          PROJECTS_TABLE: !Ref ProjectsTable
+      Events:
+        GetProjectStats:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: GET
+            Path: /v1/projects/{projectId}/stats
+
+Outputs:
+  ApiUrl:
+    Description: URL base del API (baseUrl del entorno de Postman y VITE_API_BASE_URL).
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}
+  ProjectsTableName:
+    Description: Valor de PROJECTS_TABLE para `npm run seed:projects`.
+    Value: !Ref ProjectsTable
+  DonationsTableName:
+    Value: !Ref DonationsTable
+  IdempotencyTableName:
+    Value: !Ref IdempotencyTable
+  AuditEventsTableName:
+    Value: !Ref AuditEventsTable
