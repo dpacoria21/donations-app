@@ -11,9 +11,11 @@ info:
     - Los errores de los handlers usan el formato uniforme `Error` (`{ code, message, requestId }`)
       sin detalles internos. Los rechazos que emite API Gateway antes de llegar a Lambda (por
       ejemplo, el 401 del JWT authorizer) usan el formato nativo de HTTP API.
-    - Las rutas protegidas se añadirán en la fase 2 con un esquema de seguridad OAuth 2.0 de
-      Cognito (access token con los scopes `api/projects.write`, `api/donations.write`,
-      `api/donations.read` y `api/audit.read`; CA-NF02.1).
+    - Las rutas protegidas exigen un **access token** de Cognito (`Authorization: Bearer`)
+      obtenido con Authorization Code + PKCE, y al menos uno de los scopes de la ruta
+      (CA-NF02.1). Además, la Lambda comprueba el grupo (`cognito:groups`) y el propietario.
+    - Un ID token pasa la firma pero no tiene scopes: API Gateway responde 403 (decisión D4
+      de tasks.md).
 
     Este archivo se amplía en cada fase (tasks.md). La prueba `backend/test/openapi.test.ts`
     comprueba que cada ruta implementada esté documentada aquí.
@@ -32,6 +34,8 @@ servers:
 tags:
   - name: Proyectos
     description: Catálogo público de proyectos sociales (EP-01, EP-04).
+  - name: Donaciones
+    description: Donaciones simuladas del donante autenticado (EP-03).
 paths:
   /v1/projects:
     get:
@@ -126,7 +130,64 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
+  /v1/donations/me:
+    get:
+      tags: [Donaciones]
+      operationId: getMyDonations
+      summary: Historial de donaciones del donante autenticado
+      description: |
+        Solo las donaciones cuyo `donorSub` es el `sub` del access token, de la más reciente a
+        la más antigua. No recibe ningún identificador del cliente, así que no puede leer
+        historiales ajenos (HU-07: CA-07.1, CA-07.2; HU-04: CA-04.2, CA-04.3). Requiere el
+        grupo DONANTE.
+      security:
+        - cognito: [api/donations.read]
+      responses:
+        "200":
+          description: Historial propio (lista vacía si no hay donaciones).
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DonationList"
+              example:
+                items:
+                  - donationId: 0d6f8a10-0000-4000-8000-000000000003
+                    projectId: 7a91d0c4-2e5f-4b38-a6c7-1d9e8f2b4a63
+                    amountCents: 7500
+                    currency: PEN
+                    status: PENDIENTE_SIMULACION
+                    createdAt: "2026-11-11T09:00:00.000Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
 components:
+  securitySchemes:
+    cognito:
+      type: oauth2
+      description: |
+        Amazon Cognito con Authorization Code + PKCE (cliente público, sin secreto). Reemplazar
+        `DOMINIO` por el prefijo de la salida `CognitoDomain` de la pila. El access token dura
+        15 minutos.
+      flows:
+        authorizationCode:
+          authorizationUrl: https://DOMINIO.auth.us-east-2.amazoncognito.com/oauth2/authorize
+          tokenUrl: https://DOMINIO.auth.us-east-2.amazoncognito.com/oauth2/token
+          refreshUrl: https://DOMINIO.auth.us-east-2.amazoncognito.com/oauth2/token
+          scopes:
+            openid: Identidad OIDC
+            email: Correo del usuario
+            api/projects.write: Crear y publicar proyectos (GESTOR)
+            api/donations.write: Crear y simular donaciones propias (DONANTE)
+            api/donations.read: Consultar el historial propio (DONANTE)
+            api/audit.read: Consultar eventos de auditoría (AUDITOR)
   parameters:
     ProjectId:
       name: projectId
@@ -143,6 +204,34 @@ components:
         type: string
         const: no-store
   responses:
+    Unauthorized:
+      description: |
+        Sin token, con un token alterado, caducado o de otro app client. Lo emite el JWT
+        authorizer de API Gateway con su formato nativo (CA-03.2, T02, T11). Si el token llega
+        a la Lambda pero no es un access token, la Lambda responde 401 con el formato `Error`.
+      content:
+        application/json:
+          schema:
+            anyOf:
+              - $ref: "#/components/schemas/NativeGatewayError"
+              - $ref: "#/components/schemas/Error"
+          example:
+            message: Unauthorized
+    Forbidden:
+      description: |
+        El token es válido pero no alcanza. Sin el scope de la ruta (también un ID token),
+        API Gateway responde con su formato nativo; sin el grupo requerido, la Lambda responde
+        con el formato `Error` (CA-04.1, CA-04.2).
+      content:
+        application/json:
+          schema:
+            anyOf:
+              - $ref: "#/components/schemas/NativeGatewayError"
+              - $ref: "#/components/schemas/Error"
+          example:
+            code: FORBIDDEN
+            message: No tiene permiso para esta operación
+            requestId: 2eee4fce-bdb1-498b-b467-6c24572eed51
     ProjectNotFound:
       description: El proyecto no existe, no está publicado o el identificador es inválido.
       content:
@@ -160,10 +249,7 @@ components:
       content:
         application/json:
           schema:
-            type: object
-            properties:
-              message:
-                type: string
+            $ref: "#/components/schemas/NativeGatewayError"
           example:
             message: Too Many Requests
     InternalError:
@@ -251,6 +337,46 @@ components:
           type: integer
           minimum: 0
           maximum: 100
+    DonationStatus:
+      type: string
+      enum: [PENDIENTE_SIMULACION, CONFIRMADA_SIMULADA, RECHAZADA_SIMULADA]
+    DonorDonation:
+      type: object
+      additionalProperties: false
+      required:
+        [donationId, projectId, amountCents, currency, status, createdAt]
+      properties:
+        donationId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        amountCents:
+          $ref: "#/components/schemas/AmountCents"
+        currency:
+          $ref: "#/components/schemas/Currency"
+        status:
+          $ref: "#/components/schemas/DonationStatus"
+        createdAt:
+          type: string
+          format: date-time
+    DonationList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DonorDonation"
+    NativeGatewayError:
+      type: object
+      description: Formato de los errores que API Gateway emite sin invocar a Lambda.
+      required: [message]
+      properties:
+        message:
+          type: string
     Error:
       type: object
       additionalProperties: false

@@ -128,51 +128,91 @@ con la sesión del propietario y bajo su supervisión (design.md §10; ver `AI_U
 
 ### Infraestructura (AWS SAM, `infra/template.yaml`)
 
-- [ ] HTTP API con el stage `academic`, throttling, logs de acceso y una retención de logs de
-      14 días como máximo (CA-NF07.1, design.md §6.2).
-- [ ] Tablas DynamoDB en modo on-demand (design.md §5):
-  - [ ] `Projects`: PK `projectId`, GSI `status-createdAt`.
-  - [ ] `Donations`: PK `donationId`, GSI `donorSub-createdAt`.
-  - [ ] `Idempotency`: PK `donorSub#createDonation#idempotencyKey`, TTL `expiresAt` de 24 h.
-  - [ ] `AuditEvents`: PK `eventType`, SK `timestamp#eventId`.
-- [ ] Un rol IAM por función Lambda, con solo las acciones y tablas que necesita. Sin
-      `Action: "*"` ni `Resource: "*"` injustificados (CA-NF03.1, CA-NF03.2).
-- [ ] Repositorio DynamoDB de proyectos que reemplace al de memoria sin cambiar los handlers.
-- [ ] Primer `sam deploy` en la Región seleccionada y comprobar los endpoints públicos por HTTPS
-      (CA-NF01.1).
+Parte 1 de la fase: la plantilla está escrita y validada (`sam validate --lint`) y la prueban
+`backend/test/template.test.ts` y `backend/test/projects-dynamo.test.ts`. Falta desplegarla.
+
+- [x] HTTP API con el stage `academic`, throttling (10 rps, ráfaga de 20), CORS por lista de
+      orígenes y access logs sin IP ni cabeceras. Todos los log groups tienen una retención de
+      14 días como máximo (CA-NF07.1, CA-NF01.2, design.md §6.2).
+- [x] Tablas DynamoDB en modo on-demand, que se borran con la pila (design.md §5):
+  - [x] `Projects`: PK `projectId`, GSI `status-createdAt`.
+  - [x] `Donations`: PK `donationId`, GSI `donorSub-createdAt`.
+  - [x] `Idempotency`: PK `pk` (`donorSub#createDonation#idempotencyKey`), TTL `expiresAt`.
+  - [x] `AuditEvents`: PK `eventType`, SK `sk` (`timestamp#eventId`).
+- [x] Un rol IAM explícito por función Lambda, con una sola acción de DynamoDB sobre su tabla o
+      índice y escritura solo en su propio log group. No se usa `AWSLambdaBasicExecutionRole`
+      porque concede logs sobre `Resource: "*"` (CA-NF03.1, CA-NF03.2).
+- [x] Repositorio DynamoDB de proyectos (`Query` sobre el GSI y `GetItem`), que valida con Zod
+      lo que lee. Se activa con `PROJECTS_TABLE`; en Lambda, si falta, la función falla en vez
+      de servir datos ficticios.
+- [x] `npm run build` empaqueta los handlers con esbuild (ESM, minificado, con el AWS SDK
+      dentro) y `npm run seed:projects` carga los proyectos de prueba en la tabla.
+- [x] Primer `sam deploy` de la pila `donations-academic` en `us-east-2` (2026-11-12, lo
+      ejecutó el propietario): 31 recursos en `CREATE_COMPLETE`.
+- [x] Comprobado por HTTPS: `GET /v1/projects` → 200 (lee DynamoDB con su rol), proyecto
+      inexistente → 404, preflight CORS desde `localhost:5173` → 204, y el endpoint no responde
+      por HTTP sin TLS (CA-NF01.1). La Lambda de listado escribe su log JSON en su log group.
+- [x] `npm run seed:projects`: el stage devuelve los proyectos publicados desde DynamoDB.
+- [x] Login de punta a punta en la SPA contra el user pool desplegado: inicio de sesión, «Mi
+      cuenta», pérdida de tokens al recargar y cierre de sesión que vuelve a pedir la
+      contraseña.
+- [ ] Ejecutar la colección de Postman completa contra el stage y guardar el reporte en
+      `evidence/`.
 
 ### Identidad (Cognito): HU-03, HU-04 y HU-11
 
-- [ ] User pool nuevo que pida solo el correo; el `sub` es el identificador. El pool de la demo
-      Java exige teléfono, nombre y fecha de nacimiento, y esos atributos no se pueden cambiar
-      (CA-NF10.1).
-- [ ] Grupos `DONANTE`, `GESTOR` y `AUDITOR` (requirements.md §1).
-- [ ] App client público sin secreto, con Authorization Code + PKCE y sin flujo implícito
-      (CA-03.1).
-- [ ] Access token con una vigencia de 15 minutos como máximo y revocación de tokens habilitada
-      (CA-03.3, AD-07).
-- [ ] Resource server con los scopes `api/projects.write`, `api/donations.write`,
-      `api/donations.read` y `api/audit.read` (design.md §4).
-- [ ] MFA TOTP disponible en el pool, sin SMS. El alta por usuario se hace en la fase 5
+Parte 2 de la fase: definido en `infra/template.yaml` y probado en
+`backend/test/template.test.ts`. Falta desplegarlo.
+
+- [x] User pool nuevo (plan Essentials) que pide solo el correo; el `sub` es el identificador.
+      Sin autorregistro: el equipo crea las cuentas y les asigna el grupo (CA-NF10.1).
+- [x] Grupos `DONANTE`, `GESTOR` y `AUDITOR` (requirements.md §1).
+- [x] App client público sin secreto, solo Authorization Code (PKCE) y sin flujos de contraseña
+      directos. Callbacks: la SPA local y Postman (CA-03.1).
+- [x] Access token e ID token de 15 minutos, refresh token de 12 horas y revocación de tokens
+      habilitada (CA-03.3, AD-07).
+- [x] Resource server `api` con los scopes `projects.write`, `donations.write`,
+      `donations.read` y `audit.read` (design.md §4).
+- [x] MFA TOTP disponible en el pool, sin SMS. El alta por usuario se hace en la fase 5
       (CA-11.1).
-- [ ] JWT authorizer que valide el emisor (user pool) y que la audiencia sea el `client_id`.
-      Las rutas protegidas declaran `AuthorizationScopes`, para que un ID token no sirva
-      (CA-NF02.1).
-- [ ] Usuarios de prueba ficticios para DONANTE, GESTOR y AUDITOR. El visitante no tiene cuenta.
+- [x] Managed login v2 con dominio propio y estilo de Cognito para el app client.
+- [x] JWT authorizer que valida el emisor (user pool) y que la audiencia sea el `client_id`.
+      `GET /v1/donations/me` declara `AuthorizationScopes: [api/donations.read]`; las rutas
+      públicas no tienen authorizer (CA-NF02.1).
+- [x] `GET /v1/donations/me` (HU-07): rol propio con solo `Query` sobre el GSI
+      `donorSub-createdAt`. La Lambda exige access token, scope y grupo DONANTE, y filtra por
+      el `sub` del token (CA-04.2, CA-04.3).
+- [x] El servidor local verifica tokens reales de Cognito con `aws-jwt-verify` y aplica los
+      scopes igual que el JWT authorizer.
+- [ ] Usuarios de prueba ficticios para DONANTE, GESTOR y AUDITOR, creados tras el despliegue
+      con los comandos de `backend/README.md`. El visitante no tiene cuenta.
 
 ### Pruebas de la fase
 
-- [ ] T02: ruta protegida sin token → 401 (CA-03.2).
-- [ ] T11: un ID token, un token alterado, uno vencido o uno de otro app client como Bearer → 401
-      (CA-03.2, CA-NF02.1). Ver la decisión D4.
+- [x] T02 automatizada en el servidor local: sin token → 401 con el formato nativo de API
+      Gateway (`backend/test/dev-server.test.ts`).
+- [x] T11 automatizada en el servidor local: token alterado → 401; ID token → 403 (pasa la
+      firma pero no tiene scopes) y, si llegara a la Lambda, 401 por `token_use`.
+- [x] T02 y T11 (token alterado) contra el stage desplegado: 401 `{"message":"Unauthorized"}`
+      del JWT authorizer, sin invocar la Lambda.
+- [ ] T11 con el ID token, un token vencido y uno de otro app client, con Postman y usuarios
+      reales. Anotar el código real del ID token para la decisión D4.
 
 ### Frontend
 
 - [x] Esqueleto con Vite, React 19, TypeScript y Tailwind 4, sin Bootstrap (design.md §2).
-- [ ] Añadir React Router, TanStack Query, React Hook Form y Zod.
-- [ ] Login y logout con oidc-client-ts (PKCE) y tokens en memoria, no en `localStorage`
+- [x] React Router 8 y TanStack Query 5. React Hook Form y Zod se añaden con los formularios
+      de la fase 3.
+- [x] Login con oidc-client-ts (Authorization Code + PKCE) y tokens solo en memoria
+      (`InMemoryWebStorage`), no en `localStorage` ni `sessionStorage`. Una prueba lo comprueba
       (CA-03.1, CA-NF11.1).
-- [ ] Al cerrar sesión, borrar los tokens y revocar el refresh token (CA-03.3).
+- [x] Al cerrar sesión: revocar el refresh token (`/oauth2/revoke`), borrar los tokens de
+      memoria y cerrar la sesión del managed login (`/logout`) (CA-03.3).
+- [x] Página «Mi cuenta» con el historial propio (`GET /v1/donations/me`) y mensajes para
+      401 y 403. El retorno tras el login solo acepta rutas internas.
+- [x] Login de punta a punta contra el user pool desplegado. Al recargar se pierden los
+      tokens, pero la cookie del managed login (~1 h) permite volver a entrar sin contraseña
+      hasta cerrar sesión. Mencionarlo en el informe junto a CA-03.4.
 
 ## Fase 3 — Proyectos y catálogo (día 3)
 
@@ -368,9 +408,12 @@ Conviene acordarlas con el docente antes de la fase indicada.
 - **D3 (fase 0):** CA-NF03.3 pide usuarios IAM con MFA, pero la cuenta usa la nueva experiencia
   de AWS, donde los integrantes se invitan como _team members_ desde AWS Settings. Hay que
   acordar cómo se acredita.
-- **D4 (fase 2):** HTTP API no permite personalizar sus errores nativos, y un token sin el scope
-  requerido podría responder 403 en lugar de 401. Hay que comprobar el código real de T11 y
-  documentarlo.
+- **D4 (fase 2):** CA-03.2 y T11 piden 401 para un ID token, pero el JWT authorizer de HTTP API
+  acepta su firma y su `aud` (es el `client_id`) y lo rechaza por no tener scopes: responde
+  **403**. La Lambda además lo rechaza con 401 (`token_use`), aunque no llega a ejecutarse. El
+  servidor local imita los 403. Opciones: aceptar 403 como «rechazado» y documentarlo, o
+  quitar los scopes del authorizer y validarlos solo en Lambda (contradice design.md §4).
+  Confirmar con el docente tras medir el código real en el stage desplegado.
 - **D5 (fase 5):** en Cognito, el MFA obligatorio se configura para todo el pool, no por grupo.
   Con el MFA opcional, hay que garantizar el TOTP en GESTOR y AUDITOR por procedimiento de alta
   y demostrarlo en T14.

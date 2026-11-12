@@ -35,16 +35,28 @@ export function httpEvent(
   };
 }
 
-/** Evento con claims como los deja el JWT authorizer de HTTP API. */
+/** Evento con claims tal como los deja el JWT authorizer de HTTP API (todo como texto). */
 export function jwtEvent(
   claims: Record<string, string | number | boolean | string[]>,
+  options: { routeKey?: string; requestId?: string } = {},
 ): APIGatewayProxyEventV2WithJWTAuthorizer {
-  const base = httpEvent();
+  const base = httpEvent(options);
   return {
     ...base,
     requestContext: {
       ...base.requestContext,
       authorizer: { principalId: '', integrationLatency: 0, jwt: { claims, scopes: [] } },
     },
+  };
+}
+
+/** Claims de un access token de Cognito válido para un donante de prueba. */
+export function donorClaims(overrides: Record<string, string> = {}): Record<string, string> {
+  return {
+    sub: 'b1f0c2d3-0000-4000-8000-000000000001',
+    token_use: 'access',
+    'cognito:groups': '[DONANTE]',
+    scope: 'openid email api/donations.read api/donations.write',
+    ...overrides,
   };
 }

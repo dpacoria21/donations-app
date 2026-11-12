@@ -1,0 +1,29 @@
+# Configuración de AWS SAM CLI para el stage académico. Se ejecuta desde infra/:
+#   cd infra
+#   sam validate
+#   sam deploy
+# (Windows PowerShell 5.1 no admite `&&`: ejecutar cada comando por separado.)
+# Antes de desplegar: `npm run build` en backend/ (la plantilla toma ../backend/dist).
+# No ejecutar `sam build`: el código ya llega empaquetado por esbuild.
+version = 0.1
+
+[default.global.parameters]
+region = "us-east-2"
+profile = "donations-dev"
+
+[default.validate.parameters]
+lint = true
+
+[default.deploy.parameters]
+stack_name = "donations-academic"
+resolve_s3 = true
+s3_prefix = "donations-academic"
+capabilities = "CAPABILITY_IAM"
+# Muestra el change set y pide confirmación antes de aplicar cambios.
+confirm_changeset = true
+fail_on_empty_changeset = false
+parameter_overrides = "StageName=\"academic\" AllowedOrigins=\"http://localhost:5173\" LogRetentionDays=\"14\""
+tags = "project=\"donations-app\" stage=\"academic\""
+
+[default.delete.parameters]
+stack_name = "donations-academic"

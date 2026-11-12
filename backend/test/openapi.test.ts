@@ -2,10 +2,13 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { ROUTES } from '../dev/app.ts';
+import { createDonationHandlers } from '../src/donations/handlers.ts';
+import type { Donation } from '../src/donations/model.ts';
+import { InMemoryDonationRepository } from '../src/donations/repository.ts';
 import { createProjectHandlers } from '../src/projects/handlers.ts';
 import { InMemoryProjectRepository } from '../src/projects/repository.ts';
 import { SEED_PROJECTS } from '../src/projects/seed.ts';
-import { httpEvent } from './helpers/events.ts';
+import { donorClaims, httpEvent, jwtEvent } from './helpers/events.ts';
 
 interface Schema {
   required?: string[];
@@ -44,6 +47,16 @@ describe('docs/api.yaml (contrato OpenAPI)', () => {
     expect(implemented.filter((routeKey) => !documented.includes(routeKey))).toEqual([]);
   });
 
+  it('cada ruta declara la misma seguridad que el servidor local y la plantilla SAM', () => {
+    for (const route of ROUTES) {
+      const [method = '', path = ''] = route.routeKey.split(' ');
+      const operation = spec.paths[path]?.[method.toLowerCase()] as
+        { security?: Record<string, string[]>[] } | undefined;
+      const expected = route.auth ? [{ cognito: [...route.auth.scopes] }] : [];
+      expect(operation?.security, route.routeKey).toEqual(expected);
+    }
+  });
+
   describe('las respuestas reales coinciden con los esquemas', () => {
     const handlers = createProjectHandlers(new InMemoryProjectRepository(SEED_PROJECTS));
     const projectId = '7a91d0c4-2e5f-4b38-a6c7-1d9e8f2b4a63';
@@ -58,6 +71,23 @@ describe('docs/api.yaml (contrato OpenAPI)', () => {
     it('ProjectStats', async () => {
       const result = await handlers.getProjectStats(httpEvent({ pathParameters: { projectId } }));
       expect(Object.keys(json(result.body)).sort()).toEqual(schemaKeys('ProjectStats'));
+    });
+
+    it('DonorDonation', async () => {
+      const donation: Donation = {
+        donationId: '0d6f8a10-0000-4000-8000-000000000001',
+        projectId,
+        donorSub: donorClaims().sub ?? '',
+        amountCents: 2_500,
+        currency: 'PEN',
+        status: 'PENDIENTE_SIMULACION',
+        createdAt: '2026-11-11T09:00:00.000Z',
+        updatedAt: '2026-11-11T09:00:00.000Z',
+      };
+      const { getMyDonations } = createDonationHandlers(new InMemoryDonationRepository([donation]));
+      const result = await getMyDonations(jwtEvent(donorClaims()));
+      const [item] = json(result.body).items as Record<string, unknown>[];
+      expect(Object.keys(item ?? {}).sort()).toEqual(schemaKeys('DonorDonation'));
     });
 
     it('Error', async () => {

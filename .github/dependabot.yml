@@ -7,6 +7,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # Los tipos de Node deben coincidir con el runtime (Node 24, nodejs24.x en Lambda).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       lint-y-formato:
         patterns:
@@ -17,6 +21,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # Los tipos de Node deben coincidir con el runtime (Node 24, nodejs24.x en Lambda).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       lint-y-formato:
         patterns:

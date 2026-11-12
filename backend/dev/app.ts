@@ -2,28 +2,49 @@
  * Servidor SOLO para desarrollo local. Imita API Gateway HTTP API (payload 2.0)
  * invocando los mismos handlers Lambda que se desplegarán, para probar el API
  * desde Postman o desde el frontend. No sirve páginas y no se despliega.
+ *
+ * En las rutas protegidas imita también al JWT authorizer: verifica el token con el
+ * user pool real de Cognito y exige al menos uno de los scopes de la ruta. No existe un
+ * modo «sin autenticación»: sin Cognito configurado, las rutas protegidas responden 401.
  */
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { APIGatewayProxyEventV2 } from 'aws-lambda';
+import type { APIGatewayProxyEventV2, APIGatewayProxyEventV2WithJWTAuthorizer } from 'aws-lambda';
+import { SCOPES } from '../src/authz/identity.ts';
+import { getMyDonations } from '../src/donations/handlers.ts';
 import { getProject, getProjectStats, listProjects } from '../src/projects/handlers.ts';
 import type { HttpResult } from '../src/shared/http.ts';
 
-type LambdaHandler = (event: APIGatewayProxyEventV2) => Promise<HttpResult>;
-
-interface Route {
+interface RouteBase {
   method: string;
   routeKey: string;
   pattern: RegExp;
-  handler: LambdaHandler;
 }
+
+interface PublicRoute extends RouteBase {
+  auth?: undefined;
+  handler: (event: APIGatewayProxyEventV2) => Promise<HttpResult>;
+}
+
+interface ProtectedRoute extends RouteBase {
+  /** Equivale a `AuthorizationScopes` en SAM: basta con uno de ellos. */
+  auth: { scopes: readonly string[] };
+  handler: (event: APIGatewayProxyEventV2WithJWTAuthorizer) => Promise<HttpResult>;
+}
+
+export type Route = PublicRoute | ProtectedRoute;
+
+/** Verifica firma, emisor, expiración y `client_id`/`aud`; devuelve los claims o lanza. */
+export type TokenVerifier = (token: string) => Promise<Record<string, unknown>>;
 
 export interface DevServerOptions {
   /** Orígenes del frontend admitidos por CORS (equivale a `CorsConfiguration` de HTTP API). */
   allowedOrigins?: readonly string[];
+  /** Verificador de tokens de Cognito. Sin él, las rutas protegidas responden 401. */
+  verifyToken?: TokenVerifier;
 }
 
-// Mismas rutas que declarará la plantilla SAM (design.md §4) y que documenta docs/api.yaml.
+// Mismas rutas que declara infra/template.yaml y que documenta docs/api.yaml.
 export const ROUTES: readonly Route[] = [
   {
     method: 'GET',
@@ -43,16 +64,36 @@ export const ROUTES: readonly Route[] = [
     pattern: /^\/v1\/projects\/(?<projectId>[^/]+)\/stats$/,
     handler: getProjectStats,
   },
+  {
+    method: 'GET',
+    routeKey: 'GET /v1/donations/me',
+    pattern: /^\/v1\/donations\/me$/,
+    auth: { scopes: [SCOPES.donationsRead] },
+    handler: getMyDonations,
+  },
 ];
 
 const CORS_ALLOW_METHODS = 'GET, POST, PATCH, OPTIONS';
 const CORS_ALLOW_HEADERS = 'authorization, content-type, idempotency-key';
 
+// Respuestas nativas de API Gateway (no pasan por Lambda ni usan el formato `Error`).
+const NATIVE_JSON = { 'content-type': 'application/json' };
+const UNAUTHORIZED: HttpResult = {
+  statusCode: 401,
+  headers: { ...NATIVE_JSON, 'www-authenticate': 'Bearer' },
+  body: JSON.stringify({ message: 'Unauthorized' }),
+};
+const FORBIDDEN: HttpResult = {
+  statusCode: 403,
+  headers: NATIVE_JSON,
+  body: JSON.stringify({ message: 'Forbidden' }),
+};
+
 export function createDevServer(options: DevServerOptions = {}): Server {
   const allowedOrigins = new Set(options.allowedOrigins ?? []);
 
   return createServer((req, res) => {
-    handle(req, res, allowedOrigins).catch(() => {
+    handle(req, res, allowedOrigins, options.verifyToken).catch(() => {
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
       res.end('Error interno');
     });
@@ -63,6 +104,7 @@ async function handle(
   req: IncomingMessage,
   res: ServerResponse,
   allowedOrigins: ReadonlySet<string>,
+  verifyToken: TokenVerifier | undefined,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const method = req.method ?? 'GET';
@@ -92,11 +134,20 @@ async function handle(
 
   for (const route of ROUTES) {
     const match = route.method === method ? route.pattern.exec(url.pathname) : null;
-    if (match) {
-      const result = await route.handler(toEvent(req, url, method, route, match));
-      writeResult(res, result, cors);
+    if (!match) continue;
+
+    const event = toEvent(req, url, method, route, match);
+    if (!route.auth) {
+      writeResult(res, await route.handler(event), cors);
       return;
     }
+    const decision = await authorize(req, route.auth.scopes, verifyToken);
+    if (!decision.allowed) {
+      writeResult(res, decision.response, cors);
+      return;
+    }
+    writeResult(res, await route.handler(withJwt(event, decision.claims)), cors);
+    return;
   }
 
   writeResult(
@@ -108,6 +159,61 @@ async function handle(
     },
     cors,
   );
+}
+
+type AuthDecision =
+  { allowed: true; claims: Record<string, unknown> } | { allowed: false; response: HttpResult };
+
+/** Lo mismo que hace el JWT authorizer de HTTP API antes de invocar la Lambda. */
+async function authorize(
+  req: IncomingMessage,
+  requiredScopes: readonly string[],
+  verifyToken: TokenVerifier | undefined,
+): Promise<AuthDecision> {
+  const token = /^Bearer (?<token>\S+)$/i.exec(req.headers.authorization ?? '')?.groups?.token;
+  if (!token || !verifyToken) return { allowed: false, response: UNAUTHORIZED };
+
+  let claims: Record<string, unknown>;
+  try {
+    claims = await verifyToken(token);
+  } catch {
+    return { allowed: false, response: UNAUTHORIZED };
+  }
+
+  // Un ID token no tiene claim `scope`: pasa la firma, pero no el scope (decisión D4).
+  const scopes = typeof claims.scope === 'string' ? claims.scope.split(' ') : [];
+  if (!requiredScopes.some((scope) => scopes.includes(scope))) {
+    return { allowed: false, response: FORBIDDEN };
+  }
+  return { allowed: true, claims };
+}
+
+/** HTTP API entrega todos los claims como texto; las listas, como `"[A B]"`. */
+function toAuthorizerClaims(claims: Record<string, unknown>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(claims).map(([name, value]) => [
+      name,
+      Array.isArray(value) ? `[${value.map(String).join(' ')}]` : String(value),
+    ]),
+  );
+}
+
+function withJwt(
+  event: APIGatewayProxyEventV2,
+  claims: Record<string, unknown>,
+): APIGatewayProxyEventV2WithJWTAuthorizer {
+  const scopes = typeof claims.scope === 'string' ? claims.scope.split(' ') : [];
+  return {
+    ...event,
+    requestContext: {
+      ...event.requestContext,
+      authorizer: {
+        principalId: '',
+        integrationLatency: 0,
+        jwt: { claims: toAuthorizerClaims(claims), scopes },
+      },
+    },
+  };
 }
 
 function toEvent(
