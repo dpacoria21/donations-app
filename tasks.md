@@ -373,8 +373,9 @@ frontend). Falta desplegar, publicar la SPA y reunir la evidencia de T08, T13 y 
       la sesión (CA-11.1, CA-11.2, decisión D5).
 - [x] Alta de MFA con `npm run setup:mfa` (app client sin OAuth y tokens de 5 min) antes de
       asignar el grupo; procedimiento en `docs/pruebas-manuales.md`.
-- [ ] Dar de alta con MFA a `gestor1` (quitar el grupo, `setup:mfa`, volver a asignarlo) y a un
-      AUDITOR de prueba.
+- [x] `gestor1` dado de alta con MFA (2026-11-14): sin grupo, `setup:mfa`, verificado
+      `SOFTWARE_TOKEN_MFA` y grupo GESTOR reasignado.
+- [ ] Dar de alta con MFA a un AUDITOR de prueba.
 - [ ] Demostrar que revocar el refresh token impide renovar la sesión, mientras que el access
       token emitido sigue valiendo hasta expirar (CA-03.3, CA-03.4). Procedimiento en
       `docs/pruebas-manuales.md`.
@@ -403,7 +404,9 @@ frontend). Falta desplegar, publicar la SPA y reunir la evidencia de T08, T13 y 
       `X-Content-Type-Options`, `Referrer-Policy` y `X-Frame-Options` (CA-NF11.2). La barra de
       avance pasó a `<progress>` para no necesitar estilos en línea; la CSP se probó en local
       sin violaciones.
-- [ ] Publicar la SPA (pasos en `frontend/README.md`) y probarla en la URL de CloudFront.
+- [x] SPA publicada en CloudFront (2026-11-14): `/` y las rutas internas responden 200, HTTP
+      redirige a HTTPS (301), el bucket no es accesible directamente (403) y las cabeceras de
+      seguridad están presentes.
 
 ## Fase 6 — Endurecimiento y evidencias (día 6)
 
