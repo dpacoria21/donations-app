@@ -26,4 +26,16 @@ describe('/auth/callback', () => {
     renderCallback(() => Promise.reject(new Error('access_denied')));
     expect(await screen.findByRole('alert')).toHaveTextContent('se canceló o caducó');
   });
+
+  it('T14: si el trigger exige MFA, lo explica sin repetir el texto de la URL', async () => {
+    // Así llega el error de oidc-client-ts cuando Cognito redirige con `error_description`.
+    const error = Object.assign(new Error('invalid_request'), {
+      error_description: 'PreTokenGeneration failed with error MFA_REQUERIDO: <texto>',
+    });
+    renderCallback(() => Promise.reject(error));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('necesitan una app autenticadora (MFA)');
+    expect(alert).not.toHaveTextContent('<texto>');
+    expect(alert).not.toHaveTextContent('PreTokenGeneration');
+  });
 });

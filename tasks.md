@@ -388,8 +388,8 @@ frontend). Falta desplegar, publicar la SPA y reunir la evidencia de T08, T13 y 
 - [ ] T13: token revocado usado antes de expirar → aceptado; después de expirar → rechazado
       (CA-03.4).
 - [x] T14 automatizada: el trigger rechaza a GESTOR y AUDITOR sin TOTP (y sin aceptar SMS).
-- [ ] T14 contra el stage: un GESTOR sin segundo factor no obtiene tokens. Guardar la captura
-      (CA-11.2).
+- [x] T14 contra el stage (2026-11-12): `gestor-sin-mfa` no obtiene tokens; el trigger registra
+      `MFA_REQUIRED` en `TokenGeneration_HostedAuth` (`evidence/T14/`) (CA-11.2).
 
 ### Frontend y publicación
 
@@ -513,7 +513,7 @@ rendimiento, que necesita cargar 50 proyectos en la tabla compartida.
 | T11 | ID token o token alterado como Bearer     | 401                                | 2    | —          | ⬜            |
 | T12 | Gestor consulta historial de un donante   | 403/404                            | 4    | ✅         | ✅            |
 | T13 | Token revocado usado antes de expirar     | Aceptado hasta expirar; luego 401  | 5    | —          | ⬜            |
-| T14 | GESTOR inicia sesión sin segundo factor   | No obtiene tokens                  | 5    | ✅         | ⬜            |
+| T14 | GESTOR inicia sesión sin segundo factor   | No obtiene tokens                  | 5    | ✅         | ✅            |
 
 «—» indica que la prueba depende de API Gateway, IAM o Cognito y solo se puede demostrar contra
 AWS.
