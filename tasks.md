@@ -24,7 +24,7 @@ requirements.md §7.
 | Fase | Tema                                     | Estado    |
 | ---- | ---------------------------------------- | --------- |
 | 0    | Cuenta AWS, repositorio y documentos     | Pendiente |
-| 1    | Esqueletos (backend y frontend) y CI     | En curso  |
+| 1    | Esqueletos (backend y frontend) y CI     | Completa  |
 | 2    | Infraestructura base y autenticación     | Pendiente |
 | 3    | Proyectos y catálogo                     | En curso  |
 | 4    | Donaciones e idempotencia                | Pendiente |
@@ -56,7 +56,7 @@ requirements.md §7.
 - [ ] Crear `AI_USAGE.md` con la tabla de design.md §10 e ir completándola en cada PR.
 - [ ] Actualizar `AGENTS.md`: todavía remite a un README raíz que ya no existe.
 
-## Fase 1 — Esqueleto del backend y CI
+## Fase 1 — Esqueletos (backend y frontend) y CI
 
 - [x] `backend/` con Node.js 24, TypeScript 6.0, ESLint estricto, Prettier, Vitest y esbuild.
       Versiones exactas en `package-lock.json`.
@@ -74,12 +74,21 @@ requirements.md §7.
       cada fase y añadir un entorno para el stage desplegado.
 - [x] Esqueleto del frontend: React 19, TypeScript, Vite 8, Tailwind 4, ESLint, Prettier, Vitest
       y Testing Library, con la comprobación de conexión al API.
-- [ ] `.github/workflows/ci.yml`: `npm ci` y `npm run check` (lint, formato, typecheck, tests y
-      build) para backend y frontend en cada PR (CA-NF08.1).
-- [ ] Añadir `npm audit` al CI y decidir qué hacer con las 10 alertas moderadas de las
-      dependencias de desarrollo de ESLint (design.md §6.2).
-- [ ] `docs/api.yaml` en OpenAPI 3.1 con los endpoints existentes, ampliándolo en cada fase
-      (requirements.md §7).
+- [x] `.github/workflows/ci.yml`: `npm ci` y `npm run check` (lint, formato, typecheck, tests y
+      build) para backend y frontend en cada PR y en cada push a `main`, sin credenciales de
+      AWS (CA-NF08.1, CA-NF03.2). Simulado en local; falta verlo en verde en el primer PR.
+- [x] `npm audit` en el CI (design.md §6.2). Política decidida:
+  - Dependencias de producción: el CI falla con cualquier alerta `moderate` o superior.
+  - Todas, incluidas las de desarrollo: el CI falla desde `high`.
+  - Las 10 alertas moderadas de ESLint (`minimatch`, GHSA-g3hv-75wg-m249) solo afectan a
+    herramientas de desarrollo. La única corrección es bajar ESLint a una versión mayor anterior,
+    así que se aceptan y se vigilan con Dependabot.
+- [x] `.github/dependabot.yml`: revisión semanal de npm (backend y frontend) y de GitHub Actions.
+      Falta activarlo en la configuración del repositorio (fase 0).
+- [x] `docs/api.yaml` en OpenAPI 3.1 con los endpoints existentes, ampliándolo en cada fase
+      (requirements.md §7). Redocly lo valida en `npm run check`, y
+      `backend/test/openapi.test.ts` comprueba que las rutas implementadas y las respuestas
+      reales coinciden con el contrato.
 
 ## Fase 2 — Infraestructura base y autenticación (día 2)
 

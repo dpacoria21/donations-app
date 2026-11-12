@@ -1,0 +1,59 @@
+# CI obligatorio (CA-NF08.1): lint, formato, typecheck, tests y build en cada PR,
+# más auditoría de dependencias (design.md §6.2). No usa credenciales de AWS.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # Redocly CLI (validación de docs/api.yaml): sin telemetría ni avisos de actualización.
+  REDOCLY_TELEMETRY: "off"
+  REDOCLY_SUPPRESS_UPDATE_NOTICE: "true"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [backend, frontend]
+    defaults:
+      run:
+        working-directory: ${{ matrix.project }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ${{ matrix.project }}/package-lock.json
+
+      - name: Instalar dependencias (versiones exactas del lockfile)
+        run: npm ci
+
+      # Política de auditoría (ver tasks.md, fase 1):
+      # - Dependencias de producción: ninguna vulnerabilidad desde "moderate" en adelante.
+      # - Todas, incluidas las de desarrollo: bloquea desde "high". Las alertas moderadas de
+      #   herramientas de desarrollo (ESLint) se revisan con Dependabot sin frenar el CI.
+      - name: Auditoría de dependencias de producción
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Auditoría de todas las dependencias (high o superior)
+        run: npm audit --audit-level=high
+
+      - name: Lint, formato, typecheck, tests y build
+        run: npm run check
