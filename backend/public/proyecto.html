@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Detalle del proyecto · Fundación AQP-SOLIDARIA</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body data-page="detalle">
+    <a class="skip-link" href="#contenido">Saltar al contenido</a>
+    <header class="site-header">
+      <a class="brand" href="/">Fundación AQP-SOLIDARIA</a>
+      <span class="badge">Página de prueba del backend</span>
+    </header>
+    <p class="notice" role="note">
+      Prototipo académico: las donaciones son simuladas y no se realiza ningún cobro.
+    </p>
+
+    <main id="contenido" tabindex="-1">
+      <p><a href="/">← Volver al catálogo</a></p>
+      <p id="estado" role="status" aria-live="polite">Cargando proyecto…</p>
+
+      <article id="detalle" class="detail" hidden>
+        <h1 id="titulo"></h1>
+        <p id="descripcion"></p>
+        <div class="progress-block">
+          <label for="avance">Avance de la meta</label>
+          <progress id="avance" max="100" value="0"></progress>
+          <span id="avance-texto"></span>
+        </div>
+        <dl class="facts">
+          <dt>Recaudado (confirmado simulado)</dt>
+          <dd id="recaudado"></dd>
+          <dt>Meta</dt>
+          <dd id="meta"></dd>
+          <dt>Estado</dt>
+          <dd id="estado-proyecto"></dd>
+          <dt>Identificador</dt>
+          <dd><code id="identificador"></code></dd>
+        </dl>
+      </article>
+
+      <details class="raw">
+        <summary>Respuestas del API</summary>
+        <pre id="respuestas"></pre>
+      </details>
+    </main>
+  </body>
+</html>

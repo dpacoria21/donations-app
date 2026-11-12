@@ -1,0 +1,37 @@
+{
+  "name": "donations-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "API serverless (AWS Lambda + API Gateway HTTP API) de la Plataforma de Donaciones Seguras",
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev": "node --watch dev/server.ts",
+    "start": "node dev/server.ts",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "esbuild src/projects/handlers.ts --bundle --platform=node --target=node24 --format=esm --sourcemap --outdir=dist/projects --out-extension:.js=.mjs",
+    "check": "npm run lint && npm run format:check && npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/aws-lambda": "8.10.164",
+    "@types/node": "24.19.2",
+    "esbuild": "0.28.2",
+    "eslint": "10.14.0",
+    "globals": "17.14.0",
+    "prettier": "3.10.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.2",
+    "vitest": "5.1.0"
+  }
+}

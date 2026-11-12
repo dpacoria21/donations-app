@@ -1,0 +1,19 @@
+# Dependencias y artefactos de compilación
+node_modules/
+dist/
+coverage/
+.aws-sam/
+*.tsbuildinfo
+
+# Secretos y configuración local (nunca al repositorio)
+.env
+.env.*
+!.env.example
+.local/
+
+# Logs y archivos del sistema o del editor
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
