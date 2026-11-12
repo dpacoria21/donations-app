@@ -191,10 +191,16 @@ Parte 2 de la fase: definido en `infra/template.yaml` y probado en
 ### Frontend
 
 - [x] Esqueleto con Vite, React 19, TypeScript y Tailwind 4, sin Bootstrap (design.md §2).
-- [ ] Añadir React Router, TanStack Query, React Hook Form y Zod.
-- [ ] Login y logout con oidc-client-ts (PKCE) y tokens en memoria, no en `localStorage`
+- [x] React Router 8 y TanStack Query 5. React Hook Form y Zod se añaden con los formularios
+      de la fase 3.
+- [x] Login con oidc-client-ts (Authorization Code + PKCE) y tokens solo en memoria
+      (`InMemoryWebStorage`), no en `localStorage` ni `sessionStorage`. Una prueba lo comprueba
       (CA-03.1, CA-NF11.1).
-- [ ] Al cerrar sesión, borrar los tokens y revocar el refresh token (CA-03.3).
+- [x] Al cerrar sesión: revocar el refresh token (`/oauth2/revoke`), borrar los tokens de
+      memoria y cerrar la sesión del managed login (`/logout`) (CA-03.3).
+- [x] Página «Mi cuenta» con el historial propio (`GET /v1/donations/me`) y mensajes para
+      401 y 403. El retorno tras el login solo acepta rutas internas.
+- [ ] Probar el login de punta a punta contra el user pool desplegado.
 
 ## Fase 3 — Proyectos y catálogo (día 3)
 
