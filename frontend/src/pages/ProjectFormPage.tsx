@@ -1,10 +1,10 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useId } from 'react';
-import { useForm, type FieldError } from 'react-hook-form';
+import { useForm } from 'react-hook-form';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ApiError, getJson, sendJson } from '../api/client.ts';
 import { useAuth, type SessionUser } from '../auth/context.ts';
+import { Field, inputClass } from '../components/FormField.tsx';
 import { SignInPrompt } from '../components/SignInPrompt.tsx';
 import { centsToSoles, formatPen, solesToCents } from '../lib/format.ts';
 import { projectFormSchema, type ProjectFormValues } from '../projects/schemas.ts';
@@ -225,50 +225,5 @@ function ProjectForm({
         </div>
       </form>
     </>
-  );
-}
-
-const inputClass =
-  'mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 focus-visible:outline-2 focus-visible:outline-sky-700 aria-invalid:border-red-700';
-
-interface FieldControlProps {
-  id: string;
-  'aria-invalid': boolean;
-  'aria-describedby': string | undefined;
-}
-
-/** Etiqueta, ayuda y error asociados al control para lectores de pantalla (CA-NF06.2). */
-function Field({
-  label,
-  hint,
-  error,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  error: FieldError | undefined;
-  children: (props: FieldControlProps) => React.ReactNode;
-}) {
-  const id = useId();
-  const hintId = hint ? `${id}-ayuda` : undefined;
-  const errorId = error ? `${id}-error` : undefined;
-  const describedBy = [hintId, errorId].filter(Boolean).join(' ') || undefined;
-  return (
-    <div>
-      <label htmlFor={id} className="font-semibold">
-        {label}
-      </label>
-      {hint && (
-        <p id={hintId} className="text-sm text-slate-600">
-          {hint}
-        </p>
-      )}
-      {children({ id, 'aria-invalid': Boolean(error), 'aria-describedby': describedBy })}
-      {error?.message && (
-        <p id={errorId} className="mt-1 text-sm text-red-800">
-          {error.message}
-        </p>
-      )}
-    </div>
   );
 }

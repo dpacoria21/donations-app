@@ -1,10 +1,17 @@
 import { useQuery } from '@tanstack/react-query';
+import { lazy, Suspense } from 'react';
 import { Link, useParams } from 'react-router';
 import { ApiError, getJson } from '../api/client.ts';
+import { useAuth } from '../auth/context.ts';
 import { ProjectProgress } from '../components/ProjectProgress.tsx';
 import { formatDateTime } from '../lib/format.ts';
 import { projectKeys, type Project, type ProjectStats } from '../projects/types.ts';
 import { NotFoundPage } from './NotFoundPage.tsx';
+
+// El formulario (con React Hook Form y Zod) solo se descarga si hay una sesión iniciada.
+const DonationForm = lazy(() =>
+  import('../donations/DonationForm.tsx').then((module) => ({ default: module.DonationForm })),
+);
 
 /**
  * Detalle público de un proyecto (HU-02) con sus indicadores agregados (HU-09). Un proyecto
@@ -66,6 +73,8 @@ export function ProjectPage() {
         </p>
       </section>
 
+      <DonateSection projectId={data.projectId} />
+
       <dl className="mt-6 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
         <dt className="font-semibold">Estado</dt>
         <dd>{data.status === 'PUBLICADO' ? 'Publicado' : 'Borrador'}</dd>
@@ -82,5 +91,41 @@ export function ProjectPage() {
         <dd className="break-all font-mono text-xs">{data.projectId}</dd>
       </dl>
     </article>
+  );
+}
+
+/** Donar requiere sesión; la interfaz no decide el rol: si no es DONANTE, el API responde 403. */
+function DonateSection({ projectId }: { projectId: string }) {
+  const { configured, status, user, login } = useAuth();
+  if (!configured || status === 'loading') return null;
+
+  if (!user) {
+    return (
+      <section className="mt-6 rounded-lg border border-slate-200 bg-white p-4">
+        <h2 className="font-semibold">Donar a este proyecto</h2>
+        <p className="mt-1 text-sm text-slate-700">
+          Inicia sesión para registrar una donación simulada. No se realiza ningún cobro.
+        </p>
+        <button
+          type="button"
+          onClick={() => void login(`/proyectos/${projectId}`)}
+          className="mt-3 rounded bg-sky-700 px-4 py-2 font-semibold text-white hover:bg-sky-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700"
+        >
+          Iniciar sesión para donar
+        </button>
+      </section>
+    );
+  }
+
+  return (
+    <Suspense
+      fallback={
+        <p role="status" className="mt-6">
+          Cargando el formulario…
+        </p>
+      }
+    >
+      <DonationForm projectId={projectId} user={user} />
+    </Suspense>
   );
 }

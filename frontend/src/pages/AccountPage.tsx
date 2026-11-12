@@ -1,24 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router';
 import { ApiError, getJson } from '../api/client.ts';
 import { useAuth, type SessionUser } from '../auth/context.ts';
-
-interface DonorDonation {
-  donationId: string;
-  projectId: string;
-  amountCents: number;
-  currency: 'PEN';
-  status: 'PENDIENTE_SIMULACION' | 'CONFIRMADA_SIMULADA' | 'RECHAZADA_SIMULADA';
-  createdAt: string;
-}
-
-const STATUS_LABELS: Record<DonorDonation['status'], string> = {
-  PENDIENTE_SIMULACION: 'Pendiente de simulación',
-  CONFIRMADA_SIMULADA: 'Confirmada (simulada)',
-  RECHAZADA_SIMULADA: 'Rechazada (simulada)',
-};
-
-const money = new Intl.NumberFormat('es-PE', { style: 'currency', currency: 'PEN' });
-const date = new Intl.DateTimeFormat('es-PE', { dateStyle: 'medium', timeStyle: 'short' });
+import { donationKeys, STATUS_LABELS, type DonorDonation } from '../donations/types.ts';
+import { formatDateTime, formatPen } from '../lib/format.ts';
+import { projectKeys, type ProjectList } from '../projects/types.ts';
 
 /** Mi cuenta: datos de la sesión e historial propio (HU-07, GET /v1/donations/me). */
 export function AccountPage() {
@@ -75,13 +61,20 @@ export function AccountPage() {
 
 function MyDonations({ user }: { user: SessionUser }) {
   const query = useQuery({
-    queryKey: ['donations', 'me', user.sub],
+    queryKey: donationKeys.mine(user.sub),
     queryFn: ({ signal }) =>
       getJson<{ items: DonorDonation[] }>('/v1/donations/me', {
         accessToken: user.accessToken,
         signal,
       }),
   });
+  // Nombres de los proyectos para el historial (CA-07.1): el catálogo público ya los tiene.
+  const catalog = useQuery({
+    queryKey: projectKeys.published,
+    queryFn: ({ signal }) => getJson<ProjectList>('/v1/projects', { signal }),
+  });
+  const titleOf = (projectId: string) =>
+    catalog.data?.items.find((project) => project.projectId === projectId)?.title;
 
   return (
     <section aria-labelledby="historial" className="mt-6">
@@ -99,17 +92,33 @@ function MyDonations({ user }: { user: SessionUser }) {
         </p>
       )}
       {query.isSuccess && query.data.items.length === 0 && (
-        <p className="mt-2 text-slate-700">Aún no tienes donaciones.</p>
+        <p className="mt-2 text-slate-700">
+          Aún no tienes donaciones. Elige un proyecto en el{' '}
+          <Link to="/" className="underline">
+            catálogo
+          </Link>
+          .
+        </p>
       )}
       {query.isSuccess && query.data.items.length > 0 && (
         <ul className="mt-2 divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
           {query.data.items.map((donation) => (
-            <li key={donation.donationId} className="flex flex-wrap justify-between gap-2 p-3">
-              <span className="font-semibold">{money.format(donation.amountCents / 100)}</span>
-              <span>{STATUS_LABELS[donation.status]}</span>
-              <span className="text-sm text-slate-600">
-                {date.format(new Date(donation.createdAt))}
-              </span>
+            <li key={donation.donationId} className="grid gap-1 p-3 sm:grid-cols-[1fr_auto]">
+              <div>
+                <Link
+                  to={`/proyectos/${donation.projectId}`}
+                  className="font-semibold text-sky-800 underline-offset-2 hover:underline"
+                >
+                  {titleOf(donation.projectId) ?? 'Proyecto'}
+                </Link>
+                <p className="text-sm text-slate-600">
+                  <time dateTime={donation.createdAt}>{formatDateTime(donation.createdAt)}</time>
+                </p>
+              </div>
+              <div className="sm:text-right">
+                <p className="font-semibold">{formatPen(donation.amountCents)}</p>
+                <p className="text-sm">{STATUS_LABELS[donation.status]}</p>
+              </div>
             </li>
           ))}
         </ul>
