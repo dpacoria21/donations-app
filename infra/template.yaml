@@ -1,10 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >-
-  Plataforma de Donaciones Seguras, stage académico (design.md). Fase 2, parte 1: tablas
-  DynamoDB, funciones Lambda de proyectos con un rol IAM por función y HTTP API con
-  throttling, CORS y access logs. Todo en una sola Región (us-east-2) y eliminable con
-  `sam delete`.
+  Plataforma de Donaciones Seguras, stage académico (design.md). Tablas DynamoDB, Cognito
+  (Authorization Code + PKCE, grupos, scopes, MFA TOTP), HTTP API con JWT authorizer y
+  funciones Lambda con un rol IAM por función. Todo en una sola Región (us-east-2) y
+  eliminable con `sam delete`.
 
 # Convención: las funciones intrínsecas se escriben en forma corta y escalar (!Ref, !GetAtt,
 # !Sub con texto). test/template.test.ts depende de ello para analizar la plantilla.
@@ -19,6 +19,14 @@ Parameters:
     Type: CommaDelimitedList
     Default: http://localhost:5173
     Description: Orígenes del frontend admitidos por CORS (sin barra final).
+  CallbackUrls:
+    Type: CommaDelimitedList
+    Default: http://localhost:5173/auth/callback,https://oauth.pstmn.io/v1/callback
+    Description: URLs de retorno del login (SPA local y Postman). Deben coincidir exactamente.
+  LogoutUrls:
+    Type: CommaDelimitedList
+    Default: http://localhost:5173/
+    Description: URLs a las que Cognito puede volver tras cerrar sesión.
   LogRetentionDays:
     Type: Number
     Default: 14
@@ -129,6 +137,138 @@ Resources:
           KeyType: RANGE
 
   # ---------------------------------------------------------------------------------------
+  # Cognito (Policy Administrator, design.md §6.1). Plan Essentials: managed login y hasta
+  # 10.000 usuarios activos al mes sin costo. Solo se pide el correo (CA-NF10.1).
+  # ---------------------------------------------------------------------------------------
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      UserPoolName: !Sub ${AWS::StackName}-users
+      UserPoolTier: ESSENTIALS
+      DeletionProtection: INACTIVE
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      UsernameConfiguration:
+        CaseSensitive: false
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+      # Las cuentas de prueba las crea el equipo: nadie se registra solo ni elige su grupo.
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          TemporaryPasswordValidityDays: 3
+      # TOTP con app autenticadora, nunca SMS (CA-11.1). A GESTOR y AUDITOR se les exige por
+      # el procedimiento de alta (decisión D5).
+      MfaConfiguration: OPTIONAL
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+
+  DonanteGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref UserPool
+      GroupName: DONANTE
+      Description: Crea y simula sus donaciones; consulta su propio historial.
+      Precedence: 30
+
+  GestorGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref UserPool
+      GroupName: GESTOR
+      Description: Crea y publica proyectos. Requiere MFA TOTP.
+      Precedence: 10
+
+  AuditorGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref UserPool
+      GroupName: AUDITOR
+      Description: Consulta eventos de auditoría. Requiere MFA TOTP.
+      Precedence: 20
+
+  # Scopes que exige cada ruta protegida en el JWT authorizer (design.md §4).
+  ApiResourceServer:
+    Type: AWS::Cognito::UserPoolResourceServer
+    Properties:
+      UserPoolId: !Ref UserPool
+      Identifier: api
+      Name: donations-api
+      Scopes:
+        - ScopeName: projects.write
+          ScopeDescription: Crear y publicar proyectos
+        - ScopeName: donations.write
+          ScopeDescription: Crear y simular donaciones propias
+        - ScopeName: donations.read
+          ScopeDescription: Consultar el historial propio
+        - ScopeName: audit.read
+          ScopeDescription: Consultar eventos de auditoría
+
+  # Dominio de managed login: https://<prefijo>.auth.<región>.amazoncognito.com
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      Domain: !Sub ${AWS::StackName}-${AWS::AccountId}
+      ManagedLoginVersion: 2
+
+  # Cliente público de la SPA y de Postman: sin secreto, solo Authorization Code + PKCE.
+  WebClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: ApiResourceServer
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub ${AWS::StackName}-spa
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - api/projects.write
+        - api/donations.write
+        - api/donations.read
+        - api/audit.read
+      CallbackURLs: !Ref CallbackUrls
+      LogoutURLs: !Ref LogoutUrls
+      SupportedIdentityProviders: [COGNITO]
+      # Sin flujos de contraseña directos: el login pasa siempre por managed login.
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH]
+      # Tokens de vida corta y refresh token revocable (AD-07, CA-03.3).
+      AccessTokenValidity: 15
+      IdTokenValidity: 15
+      RefreshTokenValidity: 12
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: hours
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+
+  # Managed login (versión 2) necesita un estilo por app client; se usa el de Cognito.
+  WebClientBranding:
+    Type: AWS::Cognito::ManagedLoginBranding
+    DependsOn: UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientId: !Ref WebClient
+      UseCognitoProvidedValues: true
+
+  # ---------------------------------------------------------------------------------------
   # HTTP API (PEP). Throttling por stage, CORS por lista y access logs sin IP ni tokens.
   # ---------------------------------------------------------------------------------------
   HttpApi:
@@ -141,6 +281,17 @@ Resources:
       AccessLogSettings:
         DestinationArn: !GetAtt HttpApiAccessLogGroup.Arn
         Format: '{"requestId":"$context.requestId","time":"$context.requestTime","routeKey":"$context.routeKey","status":"$context.status","latencyMs":"$context.responseLatency","integrationError":"$context.integrationErrorMessage","authorizerError":"$context.authorizer.error"}'
+      # JWT authorizer: firma, emisor, expiración y client_id del access token (CA-NF02.1).
+      # Sin DefaultAuthorizer: las rutas públicas siguen abiertas y cada ruta protegida
+      # declara el authorizer y sus AuthorizationScopes.
+      Auth:
+        Authorizers:
+          CognitoJwt:
+            IdentitySource: $request.header.Authorization
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+              audience:
+                - !Ref WebClient
       CorsConfiguration:
         AllowOrigins: !Ref AllowedOrigins
         AllowMethods: [GET, POST, PATCH, OPTIONS]
@@ -328,10 +479,84 @@ Resources:
             Method: GET
             Path: /v1/projects/{projectId}/stats
 
+  # ---------------------------------------------------------------------------------------
+  # Funciones de donaciones (rutas protegidas).
+  # ---------------------------------------------------------------------------------------
+  GetMyDonationsLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-get-my-donations
+      RetentionInDays: !Ref LogRetentionDays
+
+  GetMyDonationsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: GET /v1/donations/me. Solo Query sobre el GSI donorSub-createdAt de Donations.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt GetMyDonationsLogGroup.Arn
+        - PolicyName: query-own-donations
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:Query]
+                Resource: !Sub ${DonationsTable.Arn}/index/donorSub-createdAt
+
+  GetMyDonationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-get-my-donations
+      Description: GET /v1/donations/me (HU-07)
+      CodeUri: ../backend/dist/donations
+      Handler: handlers.getMyDonations
+      Role: !GetAtt GetMyDonationsRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref GetMyDonationsLogGroup
+      Environment:
+        Variables:
+          DONATIONS_TABLE: !Ref DonationsTable
+      Events:
+        GetMyDonations:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: GET
+            Path: /v1/donations/me
+            Auth:
+              Authorizer: CognitoJwt
+              AuthorizationScopes: [api/donations.read]
+
 Outputs:
   ApiUrl:
     Description: URL base del API (baseUrl del entorno de Postman y VITE_API_BASE_URL).
     Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}
+  UserPoolId:
+    Description: COGNITO_USER_POOL_ID del backend.
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Description: COGNITO_CLIENT_ID del backend y VITE_COGNITO_CLIENT_ID del frontend.
+    Value: !Ref WebClient
+  CognitoIssuer:
+    Description: VITE_COGNITO_AUTHORITY del frontend (emisor OIDC).
+    Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+  CognitoDomain:
+    Description: VITE_COGNITO_DOMAIN del frontend (managed login, /oauth2/revoke y /logout).
+    Value: !Sub https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com
   ProjectsTableName:
     Description: Valor de PROJECTS_TABLE para `npm run seed:projects`.
     Value: !Ref ProjectsTable

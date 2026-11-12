@@ -152,28 +152,41 @@ Parte 1 de la fase: la plantilla está escrita y validada (`sam validate --lint`
 
 ### Identidad (Cognito): HU-03, HU-04 y HU-11
 
-- [ ] User pool nuevo que pida solo el correo; el `sub` es el identificador. El pool de la demo
-      Java exige teléfono, nombre y fecha de nacimiento, y esos atributos no se pueden cambiar
-      (CA-NF10.1).
-- [ ] Grupos `DONANTE`, `GESTOR` y `AUDITOR` (requirements.md §1).
-- [ ] App client público sin secreto, con Authorization Code + PKCE y sin flujo implícito
-      (CA-03.1).
-- [ ] Access token con una vigencia de 15 minutos como máximo y revocación de tokens habilitada
-      (CA-03.3, AD-07).
-- [ ] Resource server con los scopes `api/projects.write`, `api/donations.write`,
-      `api/donations.read` y `api/audit.read` (design.md §4).
-- [ ] MFA TOTP disponible en el pool, sin SMS. El alta por usuario se hace en la fase 5
+Parte 2 de la fase: definido en `infra/template.yaml` y probado en
+`backend/test/template.test.ts`. Falta desplegarlo.
+
+- [x] User pool nuevo (plan Essentials) que pide solo el correo; el `sub` es el identificador.
+      Sin autorregistro: el equipo crea las cuentas y les asigna el grupo (CA-NF10.1).
+- [x] Grupos `DONANTE`, `GESTOR` y `AUDITOR` (requirements.md §1).
+- [x] App client público sin secreto, solo Authorization Code (PKCE) y sin flujos de contraseña
+      directos. Callbacks: la SPA local y Postman (CA-03.1).
+- [x] Access token e ID token de 15 minutos, refresh token de 12 horas y revocación de tokens
+      habilitada (CA-03.3, AD-07).
+- [x] Resource server `api` con los scopes `projects.write`, `donations.write`,
+      `donations.read` y `audit.read` (design.md §4).
+- [x] MFA TOTP disponible en el pool, sin SMS. El alta por usuario se hace en la fase 5
       (CA-11.1).
-- [ ] JWT authorizer que valide el emisor (user pool) y que la audiencia sea el `client_id`.
-      Las rutas protegidas declaran `AuthorizationScopes`, para que un ID token no sirva
-      (CA-NF02.1).
-- [ ] Usuarios de prueba ficticios para DONANTE, GESTOR y AUDITOR. El visitante no tiene cuenta.
+- [x] Managed login v2 con dominio propio y estilo de Cognito para el app client.
+- [x] JWT authorizer que valida el emisor (user pool) y que la audiencia sea el `client_id`.
+      `GET /v1/donations/me` declara `AuthorizationScopes: [api/donations.read]`; las rutas
+      públicas no tienen authorizer (CA-NF02.1).
+- [x] `GET /v1/donations/me` (HU-07): rol propio con solo `Query` sobre el GSI
+      `donorSub-createdAt`. La Lambda exige access token, scope y grupo DONANTE, y filtra por
+      el `sub` del token (CA-04.2, CA-04.3).
+- [x] El servidor local verifica tokens reales de Cognito con `aws-jwt-verify` y aplica los
+      scopes igual que el JWT authorizer.
+- [ ] Usuarios de prueba ficticios para DONANTE, GESTOR y AUDITOR, creados tras el despliegue
+      con los comandos de `backend/README.md`. El visitante no tiene cuenta.
 
 ### Pruebas de la fase
 
-- [ ] T02: ruta protegida sin token → 401 (CA-03.2).
-- [ ] T11: un ID token, un token alterado, uno vencido o uno de otro app client como Bearer → 401
-      (CA-03.2, CA-NF02.1). Ver la decisión D4.
+- [x] T02 automatizada en el servidor local: sin token → 401 con el formato nativo de API
+      Gateway (`backend/test/dev-server.test.ts`).
+- [x] T11 automatizada en el servidor local: token alterado → 401; ID token → 403 (pasa la
+      firma pero no tiene scopes) y, si llegara a la Lambda, 401 por `token_use`.
+- [ ] T02 y T11 contra el stage desplegado con la carpeta «Donaciones (protegido)» de Postman,
+      incluidos el token vencido y el de otro app client. Anotar el código real del ID token
+      para la decisión D4.
 
 ### Frontend
 
@@ -377,9 +390,12 @@ Conviene acordarlas con el docente antes de la fase indicada.
 - **D3 (fase 0):** CA-NF03.3 pide usuarios IAM con MFA, pero la cuenta usa la nueva experiencia
   de AWS, donde los integrantes se invitan como _team members_ desde AWS Settings. Hay que
   acordar cómo se acredita.
-- **D4 (fase 2):** HTTP API no permite personalizar sus errores nativos, y un token sin el scope
-  requerido podría responder 403 en lugar de 401. Hay que comprobar el código real de T11 y
-  documentarlo.
+- **D4 (fase 2):** CA-03.2 y T11 piden 401 para un ID token, pero el JWT authorizer de HTTP API
+  acepta su firma y su `aud` (es el `client_id`) y lo rechaza por no tener scopes: responde
+  **403**. La Lambda además lo rechaza con 401 (`token_use`), aunque no llega a ejecutarse. El
+  servidor local imita los 403. Opciones: aceptar 403 como «rechazado» y documentarlo, o
+  quitar los scopes del authorizer y validarlos solo en Lambda (contradice design.md §4).
+  Confirmar con el docente tras medir el código real en el stage desplegado.
 - **D5 (fase 5):** en Cognito, el MFA obligatorio se configura para todo el pool, no por grupo.
   Con el MFA opcional, hay que garantizar el TOTP en GESTOR y AUDITOR por procedimiento de alta
   y demostrarlo en T14.

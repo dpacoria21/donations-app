@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { ROUTES } from '../dev/app.ts';
+import * as donationHandlers from '../src/donations/handlers.ts';
 import * as projectHandlers from '../src/projects/handlers.ts';
 
 interface Resource {
@@ -129,13 +130,32 @@ describe('infra/template.yaml: funciones Lambda', () => {
     }
   });
 
-  it('las funciones de proyectos solo leen Projects con una acción concreta (T10)', () => {
-    const expected: Record<string, string[]> = {
-      ListProjectsFunction: ['dynamodb:Query'],
-      GetProjectFunction: ['dynamodb:GetItem'],
-      GetProjectStatsFunction: ['dynamodb:GetItem'],
+  it('cada función solo tiene la acción de DynamoDB que necesita, sin escrituras (T10)', () => {
+    const expected: Record<string, { actions: string[]; table: string; envVar: string }> = {
+      ListProjectsFunction: {
+        actions: ['dynamodb:Query'],
+        table: 'ProjectsTable',
+        envVar: 'PROJECTS_TABLE',
+      },
+      GetProjectFunction: {
+        actions: ['dynamodb:GetItem'],
+        table: 'ProjectsTable',
+        envVar: 'PROJECTS_TABLE',
+      },
+      GetProjectStatsFunction: {
+        actions: ['dynamodb:GetItem'],
+        table: 'ProjectsTable',
+        envVar: 'PROJECTS_TABLE',
+      },
+      GetMyDonationsFunction: {
+        actions: ['dynamodb:Query'],
+        table: 'DonationsTable',
+        envVar: 'DONATIONS_TABLE',
+      },
     };
-    for (const [name, actions] of Object.entries(expected)) {
+    expect(functions.map(([name]) => name).sort()).toEqual(Object.keys(expected).sort());
+
+    for (const [name, { actions, table, envVar }] of Object.entries(expected)) {
       const dynamo = statementsOf(roleOf(name)).filter((s) =>
         s.Action.some((action) => action.startsWith('dynamodb:')),
       );
@@ -144,21 +164,24 @@ describe('infra/template.yaml: funciones Lambda', () => {
         name,
       ).toEqual(actions);
       for (const statement of dynamo) {
-        expect(JSON.stringify(statement.Resource), name).toContain('ProjectsTable');
+        expect(JSON.stringify(statement.Resource), name).toContain(table);
       }
       expect(resource(name).Properties.Environment).toEqual({
-        Variables: { PROJECTS_TABLE: { Ref: 'ProjectsTable' } },
+        Variables: { [envVar]: { Ref: table } },
       });
     }
   });
 
-  it('cada Handler apunta a un export real del bundle', () => {
+  it('cada Handler apunta a un export real del bundle de su módulo', () => {
+    const modules: Record<string, Record<string, unknown>> = {
+      '../backend/dist/projects': projectHandlers,
+      '../backend/dist/donations': donationHandlers,
+    };
     for (const [name, fn] of functions) {
-      expect(fn.Properties.CodeUri, name).toBe('../backend/dist/projects');
+      const handlers = modules[String(fn.Properties.CodeUri)];
+      expect(handlers, name).toBeDefined();
       const exportName = String(fn.Properties.Handler).replace(/^handlers\./, '');
-      expect(typeof projectHandlers[exportName as keyof typeof projectHandlers], name).toBe(
-        'function',
-      );
+      expect(typeof handlers?.[exportName], name).toBe('function');
     }
   });
 });
@@ -166,15 +189,40 @@ describe('infra/template.yaml: funciones Lambda', () => {
 describe('infra/template.yaml: HTTP API', () => {
   const api = resource('HttpApi').Properties;
 
-  it('declara las mismas rutas que el servidor local y docs/api.yaml', () => {
-    const routeKeys = functions.flatMap(([, fn]) =>
+  it('declara las mismas rutas y scopes que el servidor local y docs/api.yaml', () => {
+    const declared = functions.flatMap(([, fn]) =>
       Object.values(fn.Properties.Events as Record<string, Resource>).map((event) => {
         expect(event.Type).toBe('HttpApi');
         expect(event.Properties.ApiId).toEqual({ Ref: 'HttpApi' });
-        return `${String(event.Properties.Method)} ${String(event.Properties.Path)}`;
+        const auth = event.Properties.Auth as
+          { Authorizer: string; AuthorizationScopes: string[] } | undefined;
+        if (auth) expect(auth.Authorizer).toBe('CognitoJwt');
+        const routeKey = `${String(event.Properties.Method)} ${String(event.Properties.Path)}`;
+        return `${routeKey} [${(auth?.AuthorizationScopes ?? []).join(' ')}]`;
       }),
     );
-    expect(routeKeys.sort()).toEqual(ROUTES.map((route) => route.routeKey).sort());
+    const local = ROUTES.map(
+      (route) => `${route.routeKey} [${(route.auth?.scopes ?? []).join(' ')}]`,
+    );
+    expect(declared.sort()).toEqual(local.sort());
+  });
+
+  it('el JWT authorizer valida el emisor del user pool y el client_id de la SPA (CA-NF02.1)', () => {
+    const auth = api.Auth as {
+      DefaultAuthorizer?: string;
+      Authorizers: Record<
+        string,
+        { IdentitySource: string; JwtConfiguration: { issuer: unknown; audience: unknown[] } }
+      >;
+    };
+    // Sin authorizer por defecto: las rutas públicas no exigen token.
+    expect(auth.DefaultAuthorizer).toBeUndefined();
+    const jwt = auth.Authorizers.CognitoJwt;
+    expect(jwt?.IdentitySource).toBe('$request.header.Authorization');
+    expect(jwt?.JwtConfiguration.issuer).toEqual({
+      'Fn::Sub': 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}',
+    });
+    expect(jwt?.JwtConfiguration.audience).toEqual([{ Ref: 'WebClient' }]);
   });
 
   it('usa el stage academic con throttling (design.md §6.2)', () => {
@@ -225,5 +273,57 @@ describe('infra/template.yaml: DynamoDB', () => {
       AttributeName: 'expiresAt',
       Enabled: true,
     });
+  });
+});
+
+describe('infra/template.yaml: Cognito (HU-03, HU-04, HU-11)', () => {
+  const pool = resource('UserPool').Properties;
+  const client = resource('WebClient').Properties;
+
+  it('el user pool solo pide el correo y no permite autorregistro', () => {
+    expect(pool.UsernameAttributes).toEqual(['email']);
+    expect((pool.Schema as { Name: string }[]).map((attribute) => attribute.Name)).toEqual([
+      'email',
+    ]);
+    expect(pool.AdminCreateUserConfig).toEqual({ AllowAdminCreateUserOnly: true });
+  });
+
+  it('el MFA disponible es TOTP, nunca SMS (CA-11.1)', () => {
+    expect(pool.MfaConfiguration).toBe('OPTIONAL');
+    expect(pool.EnabledMfas).toEqual(['SOFTWARE_TOKEN_MFA']);
+  });
+
+  it('existen los grupos DONANTE, GESTOR y AUDITOR', () => {
+    const groups = resourcesOfType('AWS::Cognito::UserPoolGroup').map(
+      ([, group]) => group.Properties.GroupName,
+    );
+    expect(groups.sort()).toEqual(['AUDITOR', 'DONANTE', 'GESTOR']);
+  });
+
+  it('el resource server `api` define los cuatro scopes del diseño', () => {
+    const server = resource('ApiResourceServer').Properties;
+    expect(server.Identifier).toBe('api');
+    const scopes = (server.Scopes as { ScopeName: string }[]).map((scope) => scope.ScopeName);
+    expect(scopes.sort()).toEqual(
+      ['audit.read', 'donations.read', 'donations.write', 'projects.write'].sort(),
+    );
+  });
+
+  it('el app client es público y solo usa Authorization Code + PKCE (CA-03.1)', () => {
+    expect(client.GenerateSecret).toBe(false);
+    expect(client.AllowedOAuthFlows).toEqual(['code']);
+    expect(client.ExplicitAuthFlows).toEqual(['ALLOW_REFRESH_TOKEN_AUTH']);
+    expect(template.Parameters.CallbackUrls?.Default).toContain('/auth/callback');
+  });
+
+  it('el access token dura 15 minutos como máximo y la revocación está activa (CA-03.3)', () => {
+    expect(client.TokenValidityUnits).toMatchObject({ AccessToken: 'minutes' });
+    expect(client.AccessTokenValidity).toBeLessThanOrEqual(15);
+    expect(client.EnableTokenRevocation).toBe(true);
+  });
+
+  it('managed login v2 tiene estilo asignado al app client', () => {
+    expect(resource('UserPoolDomain').Properties.ManagedLoginVersion).toBe(2);
+    expect(resource('WebClientBranding').Properties.ClientId).toEqual({ Ref: 'WebClient' });
   });
 });

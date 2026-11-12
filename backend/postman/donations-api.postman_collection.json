@@ -5,9 +5,18 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "publishedProjectId", "value": "7a91d0c4-2e5f-4b38-a6c7-1d9e8f2b4a63" },
-    { "key": "draftProjectId", "value": "e8d4b6a2-5c3f-4e19-b7a0-9f1c2d3e4b58" },
-    { "key": "missingProjectId", "value": "00000000-0000-4000-8000-000000000000" }
+    {
+      "key": "publishedProjectId",
+      "value": "7a91d0c4-2e5f-4b38-a6c7-1d9e8f2b4a63"
+    },
+    {
+      "key": "draftProjectId",
+      "value": "e8d4b6a2-5c3f-4e19-b7a0-9f1c2d3e4b58"
+    },
+    {
+      "key": "missingProjectId",
+      "value": "00000000-0000-4000-8000-000000000000"
+    }
   ],
   "event": [
     {
@@ -101,7 +110,10 @@
         },
         {
           "name": "CA-02.2 — Detalle de proyecto inexistente → 404",
-          "request": { "method": "GET", "url": "{{baseUrl}}/v1/projects/{{missingProjectId}}" },
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/v1/projects/{{missingProjectId}}"
+          },
           "event": [
             {
               "listen": "test",
@@ -117,7 +129,10 @@
         },
         {
           "name": "CA-02.2 — Identificador mal formado → 404",
-          "request": { "method": "GET", "url": "{{baseUrl}}/v1/projects/no-es-un-uuid" },
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/v1/projects/no-es-un-uuid"
+          },
           "event": [
             {
               "listen": "test",
@@ -152,13 +167,187 @@
         },
         {
           "name": "HU-09 — Indicadores de un BORRADOR → 404",
-          "request": { "method": "GET", "url": "{{baseUrl}}/v1/projects/{{draftProjectId}}/stats" },
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/v1/projects/{{draftProjectId}}/stats"
+          },
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": ["pm.test('404 Not Found', () => pm.response.to.have.status(404));"]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Donaciones (protegido)",
+      "description": "Rutas que exigen un access token de Cognito. Para obtenerlo: abrir «HU-07 — Historial propio», pestaña Authorization → Get New Access Token (Authorization Code con PKCE). Requiere las variables cognitoDomain y cognitoClientId del entorno.",
+      "auth": {
+        "type": "oauth2",
+        "oauth2": [
+          {
+            "key": "grant_type",
+            "value": "authorization_code_with_pkce",
+            "type": "string"
+          },
+          {
+            "key": "authUrl",
+            "value": "{{cognitoDomain}}/oauth2/authorize",
+            "type": "string"
+          },
+          {
+            "key": "accessTokenUrl",
+            "value": "{{cognitoDomain}}/oauth2/token",
+            "type": "string"
+          },
+          {
+            "key": "clientId",
+            "value": "{{cognitoClientId}}",
+            "type": "string"
+          },
+          {
+            "key": "scope",
+            "value": "openid email api/donations.read api/donations.write",
+            "type": "string"
+          },
+          {
+            "key": "redirect_uri",
+            "value": "https://oauth.pstmn.io/v1/callback",
+            "type": "string"
+          },
+          {
+            "key": "useBrowser",
+            "value": true,
+            "type": "boolean"
+          },
+          {
+            "key": "challengeAlgorithm",
+            "value": "S256",
+            "type": "string"
+          },
+          {
+            "key": "client_authentication",
+            "value": "body",
+            "type": "string"
+          },
+          {
+            "key": "tokenName",
+            "value": "cognito-donante",
+            "type": "string"
+          },
+          {
+            "key": "addTokenTo",
+            "value": "header",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "T02 — Sin token → 401",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": "{{baseUrl}}/v1/donations/me",
+            "description": "T02 · CA-03.2: una ruta protegida sin token responde 401."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized (T02)', () => pm.response.to.have.status(401));",
+                  "pm.test('Formato nativo de API Gateway (no llega a Lambda)', () => pm.expect(pm.response.json()).to.have.property('message'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "T11 — Token alterado → 401",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer eyJraWQiOiJ4IiwiYWxnIjoiUlMyNTYifQ.eyJzdWIiOiJhdGFjYW50ZSIsInRva2VuX3VzZSI6ImFjY2VzcyIsInNjb3BlIjoiYXBpL2RvbmF0aW9ucy5yZWFkIn0.firma-alterada"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/donations/me",
+            "description": "T11 · CA-03.2 · CA-NF02.1: un token con firma inválida responde 401."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized (T11)', () => pm.response.to.have.status(401));",
+                  "pm.test('Formato nativo de API Gateway (no llega a Lambda)', () => pm.expect(pm.response.json()).to.have.property('message'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "T11 — ID token como Bearer → rechazado",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{idToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/donations/me",
+            "description": "T11 · CA-03.2: copiar el id_token obtenido con el login en la variable idToken del entorno. HTTP API responde 403 porque el ID token no tiene scopes (decisión D4); el requisito pide 401. Documentar el código real."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('El ID token no da acceso (401 o 403, ver D4)', () => pm.expect(pm.response.code).to.be.oneOf([401, 403]));",
+                  "pm.test('No devuelve datos', () => pm.expect(pm.response.text()).to.not.include('items'));",
+                  "console.log('T11 con ID token respondió', pm.response.code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "HU-07 — Historial propio con access token",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/v1/donations/me",
+            "description": "CA-07.1 · CA-04.3: con un access token de un usuario DONANTE responde 200 y solo sus donaciones. Con un usuario GESTOR responde 403 (CA-04.2, T12)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('items es un arreglo', () => pm.expect(body.items).to.be.an('array'));",
+                  "pm.test('No repite donorSub', () => pm.expect(pm.response.text()).to.not.include('donorSub'));",
+                  "pm.test('Montos en céntimos enteros', () => body.items.forEach((d) => pm.expect(Number.isInteger(d.amountCents)).to.be.true));"
+                ]
               }
             }
           ]

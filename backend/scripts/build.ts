@@ -7,7 +7,7 @@ import { rm } from 'node:fs/promises';
 import { build } from 'esbuild';
 
 /** Un punto de entrada por módulo; cada función Lambda elige su export con `Handler`. */
-const MODULES = ['projects'] as const;
+const MODULES = ['projects', 'donations'] as const;
 
 await rm('dist', { recursive: true, force: true });
 
