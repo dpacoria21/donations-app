@@ -7,7 +7,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { z } from 'zod';
 import type { AuditEvent } from '../audit/model.ts';
-import { InMemoryAuditLog } from '../audit/recorder.ts';
+import { InMemoryAuditLog, localAuditLog } from '../audit/recorder.ts';
 import type { ProjectStatus } from '../projects/model.ts';
 import { DONATION_STATUSES, type Donation } from './model.ts';
 import type { SimulationOutcome } from './schemas.ts';
@@ -42,7 +42,11 @@ export interface DonationRepository {
   /** Historial de un donante, del más reciente al más antiguo (HU-07). */
   listByDonor(donorSub: string): Promise<Donation[]>;
   findById(donationId: string): Promise<Donation | undefined>;
-  findIdempotency(pk: string): Promise<IdempotencyRecord | undefined>;
+  /**
+   * Registro vigente de una clave. Uno vencido (`expiresAt <= nowEpochSeconds`) cuenta como
+   * inexistente: el TTL de DynamoDB puede tardar en borrarlo (hasta días).
+   */
+  findIdempotency(pk: string, nowEpochSeconds: number): Promise<IdempotencyRecord | undefined>;
   /** Un único `TransactWriteItems` condicionado (AD-05, CA-05.4). */
   createWithIdempotency(write: CreateDonationWrite): Promise<CreateDonationResult>;
   /**
@@ -65,6 +69,12 @@ export type SimulateDonationResult =
   { ok: true; donation: Donation } | { ok: false; reason: 'NOT_PENDING' };
 
 const newestFirst = (a: Donation, b: Donation) => b.createdAt.localeCompare(a.createdAt);
+
+/** Segundos desde 1970, la unidad del TTL de DynamoDB. */
+export const epochSeconds = (iso: string) => Math.floor(Date.parse(iso) / 1000);
+
+const isLive = (record: IdempotencyRecord, nowEpochSeconds: number) =>
+  record.expiresAt > nowEpochSeconds;
 
 export interface InMemoryDonationOptions {
   /** Estado actual de un proyecto, para imitar el `ConditionCheck` de la transacción. */
@@ -119,15 +129,18 @@ export class InMemoryDonationRepository implements DonationRepository {
     return Promise.resolve(donation && { ...donation });
   }
 
-  findIdempotency(pk: string): Promise<IdempotencyRecord | undefined> {
+  findIdempotency(pk: string, nowEpochSeconds: number): Promise<IdempotencyRecord | undefined> {
     const record = this.#idempotency.get(pk);
-    return Promise.resolve(record && { ...record });
+    return Promise.resolve(record && isLive(record, nowEpochSeconds) ? { ...record } : undefined);
   }
 
   async createWithIdempotency(write: CreateDonationWrite): Promise<CreateDonationResult> {
     const status = await this.#projectStatus(write.donation.projectId);
     // Desde aquí no hay `await` hasta escribir: dos solicitudes simultáneas no se intercalan.
-    if (this.#idempotency.has(write.idempotency.pk)) return 'KEY_IN_USE';
+    const existing = this.#idempotency.get(write.idempotency.pk);
+    if (existing && isLive(existing, epochSeconds(write.idempotency.createdAt))) {
+      return 'KEY_IN_USE';
+    }
     if (status !== 'PUBLICADO') return 'PROJECT_NOT_PUBLISHED';
     this.#idempotency.set(write.idempotency.pk, { ...write.idempotency });
     this.#donations.set(write.donation.donationId, { ...write.donation });
@@ -212,7 +225,10 @@ export class DynamoDonationRepository implements DonationRepository {
     return Item ? donationRecordSchema.parse(Item) : undefined;
   }
 
-  async findIdempotency(pk: string): Promise<IdempotencyRecord | undefined> {
+  async findIdempotency(
+    pk: string,
+    nowEpochSeconds: number,
+  ): Promise<IdempotencyRecord | undefined> {
     const { Item } = await this.#client.send(
       new GetCommand({
         TableName: this.#required('idempotency'),
@@ -220,13 +236,16 @@ export class DynamoDonationRepository implements DonationRepository {
         ConsistentRead: true,
       }),
     );
-    return Item ? idempotencyRecordSchema.parse(Item) : undefined;
+    if (!Item) return undefined;
+    const record = idempotencyRecordSchema.parse(Item);
+    return isLive(record, nowEpochSeconds) ? record : undefined;
   }
 
   /**
    * Clave, donación, comprobación del proyecto y auditoría en **una sola** transacción
    * (AD-05): o se escriben todas o ninguna. La condición `attribute_not_exists(pk)` hace que de
-   * dos solicitudes simultáneas con la misma clave solo una cree la donación (CA-05.4).
+   * dos solicitudes simultáneas con la misma clave solo una cree la donación (CA-05.4). Un
+   * registro ya vencido que el TTL aún no borró se puede reemplazar (`expiresAt <= :now`).
    */
   async createWithIdempotency(write: CreateDonationWrite): Promise<CreateDonationResult> {
     try {
@@ -237,7 +256,8 @@ export class DynamoDonationRepository implements DonationRepository {
               Put: {
                 TableName: this.#required('idempotency'),
                 Item: write.idempotency,
-                ConditionExpression: 'attribute_not_exists(pk)',
+                ConditionExpression: 'attribute_not_exists(pk) OR expiresAt <= :now',
+                ExpressionAttributeValues: { ':now': epochSeconds(write.idempotency.createdAt) },
               },
             },
             {
@@ -367,7 +387,7 @@ export function createDonationRepository(
   if (env.AWS_LAMBDA_FUNCTION_NAME) {
     throw new Error('Falta la variable de entorno DONATIONS_TABLE');
   }
-  return new InMemoryDonationRepository([], inMemory);
+  return new InMemoryDonationRepository([], { auditLog: localAuditLog, ...inMemory });
 }
 
 let defaultRepository: DonationRepository | undefined;

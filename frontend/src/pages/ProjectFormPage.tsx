@@ -11,6 +11,7 @@ import { projectFormSchema, type ProjectFormValues } from '../projects/schemas.t
 import { projectKeys, type Project, type ProjectList } from '../projects/types.ts';
 import type { ManageLocationState } from './ManagePage.tsx';
 import { NotFoundPage } from './NotFoundPage.tsx';
+import { PageTitle } from '../components/PageTitle.tsx';
 
 /** Crear (`/gestion/nuevo`) o editar (`/gestion/:projectId/editar`) un proyecto (HU-08, D2). */
 export function ProjectFormPage({ mode }: { mode: 'create' | 'edit' }) {
@@ -181,6 +182,7 @@ function ProjectForm({
       <Link to="/gestion" className="text-sm text-sky-800 underline">
         ← Volver a la gestión
       </Link>
+      <PageTitle>{heading}</PageTitle>
       <h1 className="mt-2 text-2xl font-bold">{heading}</h1>
       <p className="mt-2 text-slate-700">{intro}</p>
 

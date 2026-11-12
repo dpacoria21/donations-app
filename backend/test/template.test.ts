@@ -7,9 +7,11 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { ROUTES } from '../dev/app.ts';
+import * as auditHandlers from '../src/audit/handlers.ts';
 import * as donationHandlers from '../src/donations/handlers.ts';
 import * as identityHandlers from '../src/identity/handlers.ts';
 import * as projectHandlers from '../src/projects/handlers.ts';
+import { CEDAR_POLICIES, CEDAR_SCHEMA } from './helpers/cedar.ts';
 
 interface Resource {
   Type: string;
@@ -74,9 +76,16 @@ function referencedName(value: unknown): string {
   return name;
 }
 
+type ConditionalPolicy = { 'Fn::If': [string, InlinePolicy, unknown] };
+
+/** Políticas en línea de un rol; una `Fn::If` cuenta con su rama verdadera. */
+function policiesOf(roleName: string): InlinePolicy[] {
+  const policies = resource(roleName).Properties.Policies as (InlinePolicy | ConditionalPolicy)[];
+  return policies.map((policy) => ('Fn::If' in policy ? policy['Fn::If'][1] : policy));
+}
+
 function statementsOf(roleName: string): Statement[] {
-  const policies = resource(roleName).Properties.Policies as InlinePolicy[];
-  return policies.flatMap((policy) => policy.PolicyDocument.Statement);
+  return policiesOf(roleName).flatMap((policy) => policy.PolicyDocument.Statement);
 }
 
 function roleOf(functionName: string): string {
@@ -139,6 +148,11 @@ describe('infra/template.yaml: funciones Lambda', () => {
       AUDIT_EVENTS_TABLE: { Ref: 'AuditEventsTable' },
       AUDIT_PSEUDONYM_KEY: { Ref: 'AWS::StackId' },
     };
+    // HU-12: motor de autorización y policy store de Verified Permissions.
+    const PDP = {
+      AUTHZ_ENGINE: { Ref: 'AuthorizationEngine' },
+      POLICY_STORE_ID: { Ref: 'PolicyStore' },
+    };
     const expected: Record<
       string,
       { access: Record<string, string[]>; env?: Record<string, unknown> }
@@ -148,35 +162,40 @@ describe('infra/template.yaml: funciones Lambda', () => {
       GetProjectStatsFunction: { access: { ProjectsTable: ['dynamodb:GetItem'] }, env: PROJECTS },
       ListManagedProjectsFunction: {
         access: { ProjectsTable: ['dynamodb:Query'] },
-        env: PROJECTS,
+        env: { ...PROJECTS, ...PDP },
       },
       CreateProjectFunction: {
         access: { ProjectsTable: ['dynamodb:PutItem'], AuditEventsTable: ['dynamodb:PutItem'] },
-        env: { ...PROJECTS, ...AUDIT },
+        env: { ...PROJECTS, ...AUDIT, ...PDP },
       },
       UpdateProjectFunction: {
         access: {
           ProjectsTable: ['dynamodb:GetItem', 'dynamodb:UpdateItem'],
           AuditEventsTable: ['dynamodb:PutItem'],
         },
-        env: { ...PROJECTS, ...AUDIT },
+        env: { ...PROJECTS, ...AUDIT, ...PDP },
       },
       PublishProjectFunction: {
         access: {
           ProjectsTable: ['dynamodb:GetItem', 'dynamodb:UpdateItem'],
           AuditEventsTable: ['dynamodb:PutItem'],
         },
-        env: { ...PROJECTS, ...AUDIT },
+        env: { ...PROJECTS, ...AUDIT, ...PDP },
       },
       // Trigger de Cognito: no toca DynamoDB ni necesita variables propias.
       PreTokenGenerationFunction: { access: {} },
       GetMyDonationsFunction: {
         access: { DonationsTable: ['dynamodb:Query'] },
-        env: { DONATIONS_TABLE: { Ref: 'DonationsTable' } },
+        env: { DONATIONS_TABLE: { Ref: 'DonationsTable' }, ...PDP },
       },
       GetDonationFunction: {
         access: { DonationsTable: ['dynamodb:GetItem'] },
-        env: { DONATIONS_TABLE: { Ref: 'DonationsTable' } },
+        env: { DONATIONS_TABLE: { Ref: 'DonationsTable' }, ...PDP },
+      },
+      // HU-10: el auditor solo lee; la función no puede escribir ni borrar eventos.
+      ListAuditEventsFunction: {
+        access: { AuditEventsTable: ['dynamodb:Query'] },
+        env: { AUDIT_EVENTS_TABLE: { Ref: 'AuditEventsTable' } },
       },
       SimulateDonationFunction: {
         access: {
@@ -227,6 +246,7 @@ describe('infra/template.yaml: funciones Lambda', () => {
       '../backend/dist/projects': projectHandlers,
       '../backend/dist/donations': donationHandlers,
       '../backend/dist/identity': identityHandlers,
+      '../backend/dist/audit': auditHandlers,
     };
     for (const [name, fn] of functions) {
       const handlers = modules[String(fn.Properties.CodeUri)];
@@ -552,5 +572,83 @@ describe('infra/template.yaml: publicación del frontend (CA-NF01.1, CA-NF11.2)'
       'https://${SpaDistribution.DomainName}/auth/callback',
     );
     expect(JSON.stringify(client.LogoutURLs)).toContain('https://${SpaDistribution.DomainName}/');
+  });
+});
+
+describe('infra/template.yaml: Amazon Verified Permissions (HU-12, CA-12.1)', () => {
+  const strip = (text: string) =>
+    text
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('//'))
+      .join('\n')
+      .trim();
+
+  it('el motor por defecto es el embebido; Verified Permissions se activa con un parámetro', () => {
+    expect(template.Parameters.AuthorizationEngine).toMatchObject({
+      Default: 'embedded',
+      AllowedValues: ['embedded', 'verified-permissions'],
+    });
+    expect(template.Conditions?.UseVerifiedPermissions).toEqual({
+      'Fn::Equals': [{ Ref: 'AuthorizationEngine' }, 'verified-permissions'],
+    });
+  });
+
+  it('el policy store valida en modo estricto con el esquema de policies/', () => {
+    const store = resource('PolicyStore').Properties as {
+      ValidationSettings: { Mode: string };
+      Schema: { CedarJson: string };
+    };
+    expect(store.ValidationSettings.Mode).toBe('STRICT');
+    expect(JSON.parse(store.Schema.CedarJson)).toEqual(CEDAR_SCHEMA);
+  });
+
+  it('las políticas desplegadas son las mismas de policies/ (sin comentarios)', () => {
+    const deployed = resourcesOfType('AWS::VerifiedPermissions::Policy').map(([, policy]) => {
+      const definition = policy.Properties.Definition as {
+        Static: { Description: string; Statement: string };
+      };
+      expect(policy.Properties.PolicyStoreId).toEqual({ Ref: 'PolicyStore' });
+      const name = definition.Static.Description.split(' ')[0] ?? '';
+      return [name, definition.Static.Statement.trim()];
+    });
+    expect(Object.fromEntries(deployed)).toEqual(
+      Object.fromEntries(Object.entries(CEDAR_POLICIES).map(([name, text]) => [name, strip(text)])),
+    );
+  });
+
+  it('solo las funciones de HU-04, HU-07 y HU-08 pueden consultar el policy store, y solo ese', () => {
+    const allowed: string[] = [];
+    for (const [name] of functions) {
+      const role = roleOf(name);
+      const raw = resource(role).Properties.Policies as unknown[];
+      for (const policy of raw) {
+        const conditional = (policy as Partial<ConditionalPolicy>)['Fn::If'];
+        const statements = (conditional?.[1] ?? (policy as InlinePolicy)).PolicyDocument.Statement;
+        if (!statements.some((s) => s.Action.some((a) => a.startsWith('verifiedpermissions:')))) {
+          continue;
+        }
+        // Permiso condicionado al motor y limitado a IsAuthorized sobre este policy store.
+        expect(conditional?.[0], name).toBe('UseVerifiedPermissions');
+        expect(conditional?.[2], name).toEqual({ Ref: 'AWS::NoValue' });
+        expect(statements, name).toEqual([
+          {
+            Effect: 'Allow',
+            Action: ['verifiedpermissions:IsAuthorized'],
+            Resource: { 'Fn::GetAtt': 'PolicyStore.Arn' },
+          },
+        ]);
+        allowed.push(name);
+      }
+    }
+    expect(allowed.sort()).toEqual(
+      [
+        'CreateProjectFunction',
+        'GetDonationFunction',
+        'GetMyDonationsFunction',
+        'ListManagedProjectsFunction',
+        'PublishProjectFunction',
+        'UpdateProjectFunction',
+      ].sort(),
+    );
   });
 });

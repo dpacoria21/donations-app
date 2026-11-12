@@ -7,6 +7,7 @@ import { ProjectProgress } from '../components/ProjectProgress.tsx';
 import { formatDateTime } from '../lib/format.ts';
 import { projectKeys, type Project, type ProjectStats } from '../projects/types.ts';
 import { NotFoundPage } from './NotFoundPage.tsx';
+import { PageTitle } from '../components/PageTitle.tsx';
 
 // El formulario (con React Hook Form y Zod) solo se descarga si hay una sesión iniciada.
 const DonationForm = lazy(() =>
@@ -53,6 +54,7 @@ export function ProjectPage() {
       <Link to="/" className="text-sm text-sky-800 underline">
         ← Volver al catálogo
       </Link>
+      <PageTitle>{data.title}</PageTitle>
       <h1 className="mt-2 text-2xl font-bold">{data.title}</h1>
       <p className="mt-3 whitespace-pre-line text-slate-800">{data.description}</p>
 

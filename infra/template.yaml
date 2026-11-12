@@ -29,6 +29,15 @@ Parameters:
     Type: CommaDelimitedList
     Default: http://localhost:5173/
     Description: URLs a las que Cognito puede volver tras cerrar sesión.
+  AuthorizationEngine:
+    Type: String
+    Default: embedded
+    AllowedValues: [embedded, verified-permissions]
+    Description: >-
+      Motor de autorización de HU-04, HU-07 y HU-08: `embedded` (módulo authz, MVP) o
+      `verified-permissions` (políticas Cedar de policies/ en Amazon Verified Permissions,
+      HU-12). El policy store se crea siempre; solo con `verified-permissions` las funciones
+      tienen permiso para consultarlo.
   LogRetentionDays:
     Type: Number
     Default: 14
@@ -39,6 +48,9 @@ Conditions:
   # La simulación de pagos (HU-06) solo se despliega en el stage académico (CA-06.1).
   IsAcademicStage:
     Fn::Equals: [{ Ref: StageName }, academic]
+  # HU-12: las funciones consultan Verified Permissions solo con este motor.
+  UseVerifiedPermissions:
+    Fn::Equals: [{ Ref: AuthorizationEngine }, verified-permissions]
 
 Globals:
   Function:
@@ -422,6 +434,72 @@ Resources:
       RetentionInDays: !Ref LogRetentionDays
 
   # ---------------------------------------------------------------------------------------
+  # Amazon Verified Permissions (HU-12, AD-08): Policy Engine externo con Cedar. El esquema y
+  # las políticas son copia exacta de policies/ (test/template.test.ts lo comprueba). Sin
+  # solicitudes no tiene costo.
+  # ---------------------------------------------------------------------------------------
+  PolicyStore:
+    Type: AWS::VerifiedPermissions::PolicyStore
+    Properties:
+      Description: !Sub ${AWS::StackName} - autorización de proyectos y donaciones (HU-12)
+      ValidationSettings:
+        Mode: STRICT
+      DeletionProtection:
+        Mode: DISABLED
+      Schema:
+        CedarJson: '{"Donations":{"entityTypes":{"User":{"memberOfTypes":["Role"]},"Role":{},"Platform":{},"Project":{},"Donation":{"shape":{"type":"Record","attributes":{"owner":{"type":"Entity","name":"User","required":true}}}}},"actions":{"ListManagedProjects":{"appliesTo":{"principalTypes":["User"],"resourceTypes":["Platform"],"context":{"type":"Record","attributes":{"scopes":{"type":"Set","element":{"type":"String"},"required":true}}}}},"CreateProject":{"appliesTo":{"principalTypes":["User"],"resourceTypes":["Platform"],"context":{"type":"Record","attributes":{"scopes":{"type":"Set","element":{"type":"String"},"required":true}}}}},"UpdateProject":{"appliesTo":{"principalTypes":["User"],"resourceTypes":["Project"],"context":{"type":"Record","attributes":{"scopes":{"type":"Set","element":{"type":"String"},"required":true}}}}},"PublishProject":{"appliesTo":{"principalTypes":["User"],"resourceTypes":["Project"],"context":{"type":"Record","attributes":{"scopes":{"type":"Set","element":{"type":"String"},"required":true}}}}},"ReadOwnDonations":{"appliesTo":{"principalTypes":["User"],"resourceTypes":["Platform"],"context":{"type":"Record","attributes":{"scopes":{"type":"Set","element":{"type":"String"},"required":true}}}}},"ReadDonation":{"appliesTo":{"principalTypes":["User"],"resourceTypes":["Donation"],"context":{"type":"Record","attributes":{"scopes":{"type":"Set","element":{"type":"String"},"required":true}}}}}}}}'
+
+  GestorGestionaProyectosPolicy:
+    Type: AWS::VerifiedPermissions::Policy
+    Properties:
+      PolicyStoreId: !Ref PolicyStore
+      Definition:
+        Static:
+          Description: gestor-gestiona-proyectos (HU-04, HU-08)
+          Statement: |
+            permit (
+              principal in Donations::Role::"GESTOR",
+              action in [
+                Donations::Action::"ListManagedProjects",
+                Donations::Action::"CreateProject",
+                Donations::Action::"UpdateProject",
+                Donations::Action::"PublishProject"
+              ],
+              resource
+            )
+            when { context.scopes.contains("api/projects.write") };
+
+  DonanteConsultaHistorialPolicy:
+    Type: AWS::VerifiedPermissions::Policy
+    Properties:
+      PolicyStoreId: !Ref PolicyStore
+      Definition:
+        Static:
+          Description: donante-consulta-historial (HU-07, T12)
+          Statement: |
+            permit (
+              principal in Donations::Role::"DONANTE",
+              action == Donations::Action::"ReadOwnDonations",
+              resource == Donations::Platform::"donations"
+            )
+            when { context.scopes.contains("api/donations.read") };
+
+  DonanteLeeDonacionPropiaPolicy:
+    Type: AWS::VerifiedPermissions::Policy
+    Properties:
+      PolicyStoreId: !Ref PolicyStore
+      Definition:
+        Static:
+          Description: donante-lee-donacion-propia (HU-07, T09)
+          Statement: |
+            permit (
+              principal in Donations::Role::"DONANTE",
+              action == Donations::Action::"ReadDonation",
+              resource
+            )
+            when { resource.owner == principal && context.scopes.contains("api/donations.read") };
+
+  # ---------------------------------------------------------------------------------------
   # Funciones de proyectos (lectura pública). Cada una tiene su propio rol con una sola
   # acción de DynamoDB y permiso de escritura solo en su propio log group (CA-NF03.1).
   # No se usa AWSLambdaBasicExecutionRole porque concede logs sobre Resource "*".
@@ -632,6 +710,17 @@ Resources:
               - Effect: Allow
                 Action: [dynamodb:Query]
                 Resource: !Sub ${ProjectsTable.Arn}/index/status-createdAt
+        # HU-12: consultar el policy store, solo con AuthorizationEngine=verified-permissions.
+        - Fn::If:
+            - UseVerifiedPermissions
+            - PolicyName: is-authorized
+              PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  - Effect: Allow
+                    Action: [verifiedpermissions:IsAuthorized]
+                    Resource: !GetAtt PolicyStore.Arn
+            - !Ref AWS::NoValue
 
   ListManagedProjectsFunction:
     Type: AWS::Serverless::Function
@@ -646,6 +735,8 @@ Resources:
       Environment:
         Variables:
           PROJECTS_TABLE: !Ref ProjectsTable
+          AUTHZ_ENGINE: !Ref AuthorizationEngine
+          POLICY_STORE_ID: !Ref PolicyStore
       Events:
         ListManagedProjects:
           Type: HttpApi
@@ -699,6 +790,17 @@ Resources:
               - Effect: Allow
                 Action: [dynamodb:PutItem]
                 Resource: !GetAtt AuditEventsTable.Arn
+        # HU-12: consultar el policy store, solo con AuthorizationEngine=verified-permissions.
+        - Fn::If:
+            - UseVerifiedPermissions
+            - PolicyName: is-authorized
+              PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  - Effect: Allow
+                    Action: [verifiedpermissions:IsAuthorized]
+                    Resource: !GetAtt PolicyStore.Arn
+            - !Ref AWS::NoValue
 
   CreateProjectFunction:
     Type: AWS::Serverless::Function
@@ -716,6 +818,8 @@ Resources:
           AUDIT_EVENTS_TABLE: !Ref AuditEventsTable
           # Clave del seudónimo del actor: única por despliegue (ver src/audit/model.ts).
           AUDIT_PSEUDONYM_KEY: !Ref AWS::StackId
+          AUTHZ_ENGINE: !Ref AuthorizationEngine
+          POLICY_STORE_ID: !Ref PolicyStore
       Events:
         CreateProject:
           Type: HttpApi
@@ -769,6 +873,17 @@ Resources:
               - Effect: Allow
                 Action: [dynamodb:PutItem]
                 Resource: !GetAtt AuditEventsTable.Arn
+        # HU-12: consultar el policy store, solo con AuthorizationEngine=verified-permissions.
+        - Fn::If:
+            - UseVerifiedPermissions
+            - PolicyName: is-authorized
+              PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  - Effect: Allow
+                    Action: [verifiedpermissions:IsAuthorized]
+                    Resource: !GetAtt PolicyStore.Arn
+            - !Ref AWS::NoValue
 
   UpdateProjectFunction:
     Type: AWS::Serverless::Function
@@ -785,6 +900,8 @@ Resources:
           PROJECTS_TABLE: !Ref ProjectsTable
           AUDIT_EVENTS_TABLE: !Ref AuditEventsTable
           AUDIT_PSEUDONYM_KEY: !Ref AWS::StackId
+          AUTHZ_ENGINE: !Ref AuthorizationEngine
+          POLICY_STORE_ID: !Ref PolicyStore
       Events:
         UpdateProject:
           Type: HttpApi
@@ -837,6 +954,17 @@ Resources:
               - Effect: Allow
                 Action: [dynamodb:PutItem]
                 Resource: !GetAtt AuditEventsTable.Arn
+        # HU-12: consultar el policy store, solo con AuthorizationEngine=verified-permissions.
+        - Fn::If:
+            - UseVerifiedPermissions
+            - PolicyName: is-authorized
+              PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  - Effect: Allow
+                    Action: [verifiedpermissions:IsAuthorized]
+                    Resource: !GetAtt PolicyStore.Arn
+            - !Ref AWS::NoValue
 
   PublishProjectFunction:
     Type: AWS::Serverless::Function
@@ -853,6 +981,8 @@ Resources:
           PROJECTS_TABLE: !Ref ProjectsTable
           AUDIT_EVENTS_TABLE: !Ref AuditEventsTable
           AUDIT_PSEUDONYM_KEY: !Ref AWS::StackId
+          AUTHZ_ENGINE: !Ref AuthorizationEngine
+          POLICY_STORE_ID: !Ref PolicyStore
       Events:
         PublishProject:
           Type: HttpApi
@@ -901,6 +1031,17 @@ Resources:
               - Effect: Allow
                 Action: [dynamodb:Query]
                 Resource: !Sub ${DonationsTable.Arn}/index/donorSub-createdAt
+        # HU-12: consultar el policy store, solo con AuthorizationEngine=verified-permissions.
+        - Fn::If:
+            - UseVerifiedPermissions
+            - PolicyName: is-authorized
+              PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  - Effect: Allow
+                    Action: [verifiedpermissions:IsAuthorized]
+                    Resource: !GetAtt PolicyStore.Arn
+            - !Ref AWS::NoValue
 
   GetMyDonationsFunction:
     Type: AWS::Serverless::Function
@@ -915,6 +1056,8 @@ Resources:
       Environment:
         Variables:
           DONATIONS_TABLE: !Ref DonationsTable
+          AUTHZ_ENGINE: !Ref AuthorizationEngine
+          POLICY_STORE_ID: !Ref PolicyStore
       Events:
         GetMyDonations:
           Type: HttpApi
@@ -1046,6 +1189,17 @@ Resources:
               - Effect: Allow
                 Action: [dynamodb:GetItem]
                 Resource: !GetAtt DonationsTable.Arn
+        # HU-12: consultar el policy store, solo con AuthorizationEngine=verified-permissions.
+        - Fn::If:
+            - UseVerifiedPermissions
+            - PolicyName: is-authorized
+              PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  - Effect: Allow
+                    Action: [verifiedpermissions:IsAuthorized]
+                    Resource: !GetAtt PolicyStore.Arn
+            - !Ref AWS::NoValue
 
   # La ruta estática /v1/donations/me tiene prioridad sobre /v1/donations/{donationId}.
   GetDonationFunction:
@@ -1061,6 +1215,8 @@ Resources:
       Environment:
         Variables:
           DONATIONS_TABLE: !Ref DonationsTable
+          AUTHZ_ENGINE: !Ref AuthorizationEngine
+          POLICY_STORE_ID: !Ref PolicyStore
       Events:
         GetDonation:
           Type: HttpApi
@@ -1071,6 +1227,68 @@ Resources:
             Auth:
               Authorizer: CognitoJwt
               AuthorizationScopes: [api/donations.read]
+
+  # ---------------------------------------------------------------------------------------
+  # Consulta de auditoría (HU-10, extensión). Solo AUDITOR; el MFA lo exige el trigger.
+  # ---------------------------------------------------------------------------------------
+  ListAuditEventsLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-list-audit-events
+      RetentionInDays: !Ref LogRetentionDays
+
+  ListAuditEventsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: GET /v1/audit. Solo Query sobre AuditEvents (lectura).
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt ListAuditEventsLogGroup.Arn
+        - PolicyName: query-audit-events
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:Query]
+                Resource: !GetAtt AuditEventsTable.Arn
+
+  ListAuditEventsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-list-audit-events
+      Description: GET /v1/audit (HU-10)
+      CodeUri: ../backend/dist/audit
+      Handler: handlers.listAuditEvents
+      Role: !GetAtt ListAuditEventsRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref ListAuditEventsLogGroup
+      Environment:
+        Variables:
+          AUDIT_EVENTS_TABLE: !Ref AuditEventsTable
+      Events:
+        ListAuditEvents:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: GET
+            Path: /v1/audit
+            Auth:
+              Authorizer: CognitoJwt
+              AuthorizationScopes: [api/audit.read]
 
   # ---------------------------------------------------------------------------------------
   # Simulación de pagos (HU-06). Función, rol y log group solo existen en el stage academic.
@@ -1317,3 +1535,6 @@ Outputs:
     Value: !Ref IdempotencyTable
   AuditEventsTableName:
     Value: !Ref AuditEventsTable
+  PolicyStoreId:
+    Description: Policy store de Verified Permissions (HU-12).
+    Value: !Ref PolicyStore

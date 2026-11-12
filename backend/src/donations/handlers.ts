@@ -4,6 +4,7 @@ import { createAuditor, memoize } from '../audit/auditor.ts';
 import { getPseudonymKey } from '../audit/model.ts';
 import { createAuditRecorder, type AuditRecorder } from '../audit/recorder.ts';
 import { getIdentity, requireGroup, requireScope, SCOPES } from '../authz/identity.ts';
+import { authorize, createPdp, type PolicyDecisionPoint } from '../authz/pdp.ts';
 import {
   getProjectRepository,
   InMemoryProjectRepository,
@@ -13,7 +14,7 @@ import { parseJsonBody } from '../shared/body.ts';
 import { badRequest, conflict, notFound } from '../shared/errors.ts';
 import { json, withHttp, type HttpResult } from '../shared/http.ts';
 import { toDonorDonation, type Donation } from './model.ts';
-import { getDonationRepository, type DonationRepository } from './repository.ts';
+import { epochSeconds, getDonationRepository, type DonationRepository } from './repository.ts';
 import {
   createDonationSchema,
   donationIdSchema,
@@ -35,6 +36,8 @@ export interface DonationHandlerOptions {
   pseudonymKey?: () => string;
   /** Stage de API Gateway; la simulación solo existe en `academic` (CA-06.1). */
   stage?: () => string;
+  /** Motor de autorización del historial (HU-07, HU-12). Se crea al primer uso. */
+  pdp?: () => PolicyDecisionPoint;
 }
 
 const DONATION_NOT_FOUND = 'Donación no encontrada';
@@ -61,6 +64,7 @@ export function createDonationHandlers(
   const newId = options.newId ?? randomUUID;
   const projects = memoize(options.projects ?? getProjectRepository);
   const stage = options.stage ?? (() => process.env.STAGE ?? 'academic');
+  const pdp = memoize(options.pdp ?? createPdp);
   const audited = createAuditor({
     now,
     newId,
@@ -70,10 +74,14 @@ export function createDonationHandlers(
 
   /**
    * Si la clave ya se usó: con el mismo cuerpo devuelve la respuesta original (sin crear otra
-   * donación); con otro cuerpo, 409 (CA-05.4). `null` si la clave es nueva.
+   * donación); con otro cuerpo, 409 (CA-05.4). `null` si la clave es nueva o ya venció.
    */
-  async function replayIfKnown(pk: string, hash: string): Promise<HttpResult | null> {
-    const record = await repository.findIdempotency(pk);
+  async function replayIfKnown(
+    pk: string,
+    hash: string,
+    nowEpochSeconds: number,
+  ): Promise<HttpResult | null> {
+    const record = await repository.findIdempotency(pk, nowEpochSeconds);
     if (!record) return null;
     if (record.payloadHash !== hash) {
       throw conflict('La clave Idempotency-Key ya se usó con otros datos');
@@ -107,9 +115,11 @@ export function createDonationHandlers(
           const input = parseJsonBody(event, createDonationSchema);
           const hash = payloadHash(input);
           const pk = idempotencyPk(identity.sub, key.data);
+          const timestamp = now();
+          const nowSeconds = epochSeconds(timestamp);
 
           // 1. ¿Es un reintento? Se responde igual que la primera vez, sin crear nada.
-          const replay = await replayIfKnown(pk, hash);
+          const replay = await replayIfKnown(pk, hash, nowSeconds);
           if (replay) return replay;
 
           // 2. El proyecto debe existir y estar PUBLICADO (CA-05.2). Ningún error toca el acumulado.
@@ -120,7 +130,6 @@ export function createDonationHandlers(
           }
 
           // 3. Clave + donación + comprobación del proyecto + auditoría, en una transacción.
-          const timestamp = now();
           const donation: Donation = {
             donationId: newId(),
             projectId: input.projectId,
@@ -138,7 +147,7 @@ export function createDonationHandlers(
               payloadHash: hash,
               donationId: donation.donationId,
               responseStatus: 201,
-              expiresAt: Math.floor(Date.parse(timestamp) / 1000) + IDEMPOTENCY_TTL_SECONDS,
+              expiresAt: nowSeconds + IDEMPOTENCY_TTL_SECONDS,
               createdAt: timestamp,
             },
             // Sin montos ni datos del donante: solo el recurso (CA-10.2).
@@ -147,7 +156,7 @@ export function createDonationHandlers(
 
           if (result === 'KEY_IN_USE') {
             // Otra solicitud con la misma clave ganó la carrera: se repite su respuesta.
-            const winner = await replayIfKnown(pk, hash);
+            const winner = await replayIfKnown(pk, hash, nowSeconds);
             if (winner) return winner;
             throw conflict('La clave Idempotency-Key ya está en uso');
           }
@@ -161,29 +170,45 @@ export function createDonationHandlers(
 
     /**
      * GET /v1/donations/me: historial propio (HU-07). API Gateway ya verificó el access token
-     * y el scope `api/donations.read`; aquí se exige además el grupo DONANTE y se filtra por
-     * el `sub` del token, nunca por un parámetro del cliente (CA-04.2, CA-04.3).
+     * y el scope `api/donations.read`; aquí el PDP exige además el grupo DONANTE y se filtra
+     * por el `sub` del token, nunca por un parámetro del cliente (CA-04.2, CA-04.3).
      */
     getMyDonations: withHttp('donations.listMine', async (event: DonorEvent) => {
       const identity = getIdentity(event);
-      requireScope(identity, SCOPES.donationsRead);
-      requireGroup(identity, 'DONANTE');
+      await authorize(pdp(), {
+        identity,
+        action: 'ReadOwnDonations',
+        resource: { type: 'Platform' },
+      });
       const donations = await repository.listByDonor(identity.sub);
       return json(200, { items: donations.map(toDonorDonation) });
     }),
 
     /**
-     * GET /v1/donations/{donationId} (decisión D1): solo la propia. Una donación ajena responde
-     * igual que una inexistente, 404, para no revelar que existe (CA-07.2, T09, OWASP API1).
+     * GET /v1/donations/{donationId} (decisión D1): solo la propia. Primero el rol (403 si no es
+     * DONANTE, T12); después, con el propietario guardado en DynamoDB, la propiedad. Una donación
+     * ajena responde igual que una inexistente, 404, para no revelar que existe (CA-07.2, T09).
      */
     getDonation: withHttp('donations.get', async (event: DonorEvent) => {
       const identity = getIdentity(event);
-      requireScope(identity, SCOPES.donationsRead);
-      requireGroup(identity, 'DONANTE');
+      await authorize(pdp(), {
+        identity,
+        action: 'ReadOwnDonations',
+        resource: { type: 'Platform' },
+      });
       const id = donationIdSchema.safeParse(event.pathParameters?.donationId);
       if (!id.success) throw notFound(DONATION_NOT_FOUND);
       const donation = await repository.findById(id.data);
-      if (donation?.donorSub !== identity.sub) throw notFound(DONATION_NOT_FOUND);
+      if (!donation) throw notFound(DONATION_NOT_FOUND);
+      await authorize(
+        pdp(),
+        {
+          identity,
+          action: 'ReadDonation',
+          resource: { type: 'Donation', id: donation.donationId, ownerSub: donation.donorSub },
+        },
+        () => notFound(DONATION_NOT_FOUND),
+      );
       return json(200, toDonorDonation(donation));
     }),
 

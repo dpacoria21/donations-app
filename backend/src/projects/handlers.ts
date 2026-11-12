@@ -3,13 +3,14 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyEventV2WithJWTAuthorizer } 
 import { createAuditor, memoize, type AuditedOperation } from '../audit/auditor.ts';
 import { getPseudonymKey, type AuditEventType } from '../audit/model.ts';
 import { createAuditRecorder, type AuditRecorder } from '../audit/recorder.ts';
+import { getIdentity, type Identity } from '../authz/identity.ts';
 import {
-  getIdentity,
-  requireGroup,
-  requireScope,
-  SCOPES,
-  type Identity,
-} from '../authz/identity.ts';
+  authorize,
+  createPdp,
+  type AuthzAction,
+  type AuthzResource,
+  type PolicyDecisionPoint,
+} from '../authz/pdp.ts';
 import { parseJsonBody } from '../shared/body.ts';
 import { conflict, notFound } from '../shared/errors.ts';
 import { json, withHttp } from '../shared/http.ts';
@@ -25,6 +26,8 @@ export interface ProjectHandlerOptions {
   auditRecorder?: () => AuditRecorder;
   /** Clave del seudónimo del actor. Se lee al primer uso. */
   pseudonymKey?: () => string;
+  /** Motor de autorización (embebido o Verified Permissions). Se crea al primer uso. */
+  pdp?: () => PolicyDecisionPoint;
 }
 
 const PROJECT_NOT_FOUND = 'Proyecto no encontrado';
@@ -33,8 +36,8 @@ type ManagedEvent = APIGatewayProxyEventV2WithJWTAuthorizer;
 
 /**
  * Rutas públicas (catálogo) y de gestión (GESTOR con `api/projects.write`, HU-08).
- * API Gateway ya verificó el access token y el scope de las rutas de gestión; aquí se exige
- * además el scope y el grupo GESTOR (defensa en profundidad, CA-04.1).
+ * API Gateway ya verificó el access token y el scope de las rutas de gestión; aquí el PDP exige
+ * además el scope y el grupo GESTOR en cada solicitud (defensa en profundidad, CA-04.1, HU-12).
  */
 export function createProjectHandlers(
   repository: ProjectRepository,
@@ -42,6 +45,7 @@ export function createProjectHandlers(
 ) {
   const now = options.now ?? (() => new Date().toISOString());
   const newId = options.newId ?? randomUUID;
+  const pdp = memoize(options.pdp ?? createPdp);
   const audited = createAuditor({
     now,
     newId,
@@ -76,9 +80,13 @@ export function createProjectHandlers(
     return project;
   }
 
-  function requireManager(identity: Identity): void {
-    requireScope(identity, SCOPES.projectsWrite);
-    requireGroup(identity, 'GESTOR');
+  /** 403 si el PDP no permite la acción de gestión (HU-04, HU-08). */
+  function requireManager(
+    identity: Identity,
+    action: AuthzAction,
+    resource: AuthzResource = { type: 'Platform' },
+  ): Promise<void> {
+    return authorize(pdp(), { identity, action, resource });
   }
 
   function managedProjectId(event: ManagedEvent): string {
@@ -103,7 +111,7 @@ export function createProjectHandlers(
 
     /** GET /v1/manage/projects: todos los proyectos, también los BORRADOR. Solo lectura. */
     listManagedProjects: withHttp('projects.listManaged', async (event: ManagedEvent) => {
-      requireManager(getIdentity(event));
+      await requireManager(getIdentity(event), 'ListManagedProjects');
       const projects = await repository.listAll();
       return json(200, { items: projects.map(toPublicProject) });
     }),
@@ -114,7 +122,7 @@ export function createProjectHandlers(
         event,
         operation(event, 'PROJECT_CREATE', 'projects.create'),
         async (identity, audit) => {
-          requireManager(identity);
+          await requireManager(identity, 'CreateProject');
           const input = parseJsonBody(event, createProjectSchema);
           const timestamp = now();
           const project: Project = {
@@ -142,8 +150,8 @@ export function createProjectHandlers(
         event,
         operation(event, 'PROJECT_UPDATE', 'projects.update'),
         async (identity, audit) => {
-          requireManager(identity);
           const projectId = managedProjectId(event);
+          await requireManager(identity, 'UpdateProject', { type: 'Project', id: projectId });
           const changes = parseJsonBody(event, updateProjectSchema);
           const result = await repository.update(
             projectId,
@@ -167,8 +175,8 @@ export function createProjectHandlers(
         event,
         operation(event, 'PROJECT_PUBLISH', 'projects.publish'),
         async (identity, audit) => {
-          requireManager(identity);
           const projectId = managedProjectId(event);
+          await requireManager(identity, 'PublishProject', { type: 'Project', id: projectId });
           const result = await repository.publish(
             projectId,
             now(),

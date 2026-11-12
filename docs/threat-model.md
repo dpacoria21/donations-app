@@ -109,11 +109,11 @@ flowchart LR
 
 ### Repudio (Repudiation)
 
-| ID  | Amenaza                                               | Límite | Control                                                                                                              | Evidencia      | Estado                              |
-| --- | ----------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------- | -------------- | ----------------------------------- |
-| R1  | Un usuario niega haber donado o publicado un proyecto | TB4    | `AuditEvents` con actor seudonimizado, acción, resultado, `requestId` y fecha, en la misma transacción que el cambio | CA-08.3, HU-10 | 🟡 F3 (proyectos) / F4 (donaciones) |
-| R2  | Un cambio de infraestructura sin autor identificable  | TB6    | CloudTrail; cambios solo por PR revisado y plantilla SAM                                                             | CA-NF07.2      | ⬜ F6                               |
-| R3  | No poder reconstruir una solicitud fallida            | TB4    | Log JSON por solicitud con `requestId`, acción, resultado, código y duración                                         | CA-NF07.1      | ✅ F1                               |
+| ID  | Amenaza                                               | Límite | Control                                                                                                              | Evidencia      | Estado             |
+| --- | ----------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------- | -------------- | ------------------ |
+| R1  | Un usuario niega haber donado o publicado un proyecto | TB4    | `AuditEvents` con actor seudonimizado, acción, resultado, `requestId` y fecha, en la misma transacción que el cambio | CA-08.3, HU-10 | ✅ F4 / F7 (HU-10) |
+| R2  | Un cambio de infraestructura sin autor identificable  | TB6    | CloudTrail; cambios solo por PR revisado y plantilla SAM                                                             | CA-NF07.2      | ✅ F6              |
+| R3  | No poder reconstruir una solicitud fallida            | TB4    | Log JSON por solicitud con `requestId`, acción, resultado, código y duración                                         | CA-NF07.1      | ✅ F1              |
 
 ### Divulgación de información (Information disclosure)
 
@@ -122,7 +122,7 @@ flowchart LR
 | I1  | BOLA: leer donaciones o historial de otro usuario         | TB4    | Ownership por `sub` contra el registro persistido; 404 sin filtrar existencia   | T09, T12        | ✅ F4           |
 | I2  | Ver proyectos en BORRADOR desde el catálogo público       | TB4    | Solo `PUBLICADO`; 404 uniforme para inexistente, inválido o borrador            | T01, CA-02.2    | ✅ F1 (memoria) |
 | I3  | Errores que revelan trazas, nombres de tablas o internos  | TB4    | Formato `{ code, message, requestId }`; 500 genérico                            | Tests backend   | ✅ F1           |
-| I4  | Tokens o datos personales en logs                         | TB5    | El logger no registra cabeceras, body ni claims; solo metadatos de la solicitud | CA-NF01.2       | 🟡 F1           |
+| I4  | Tokens o datos personales en logs                         | TB5    | El logger no registra cabeceras, body ni claims; solo metadatos de la solicitud | CA-NF01.2       | ✅ F6           |
 | I5  | XSS que roba tokens                                       | TB1    | Tokens en memoria, CSP restrictiva, React sin `dangerouslySetInnerHTML`         | CA-NF11.1, 11.2 | ✅ F5           |
 | I6  | Secretos en el repositorio o en el bundle de la SPA       | TB6    | `.env` ignorado, variables `VITE_*` solo públicas, secret scanning de GitHub    | Repo limpio     | 🟡 F0           |
 | I7  | Las estadísticas exponen donantes o importes individuales | TB4    | Solo cifras agregadas del monto confirmado                                      | CA-09.2         | ✅ F1 (memoria) |
@@ -137,13 +137,13 @@ flowchart LR
 
 ### Elevación de privilegios (Elevation of privilege)
 
-| ID  | Amenaza                                                                    | Límite | Control                                                                                   | Evidencia       | Estado            |
-| --- | -------------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------- | --------------- | ----------------- |
-| E1  | Un DONANTE llama a rutas de GESTOR (crear o publicar)                      | TB4    | RBAC por `cognito:groups` en `authz`, además del scope                                    | T03             | 🟡 F1 (unit) / F3 |
-| E2  | Un usuario se asigna a sí mismo un grupo privilegiado                      | TB2    | Grupos solo por administrador; sin atributos de rol editables por el usuario              | Config. Cognito | ⬜ F2             |
-| E3  | Una Lambda comprometida escribe en tablas que no le tocan                  | TB5    | Un rol por función con acciones y ARNs concretos; sin `*` injustificado                   | T10, CA-NF03.1  | ⬜ F2/F6          |
-| E4  | Usar la simulación de pago fuera del entorno académico                     | TB4    | La ruta `simulate` solo existe en el stage `academic`                                     | Config. SAM     | ✅ F5             |
-| E5  | Un asistente de IA propone políticas con comodines o actúa sobre la cuenta | TB6    | Reglas de design.md §10: PR revisado por otro integrante, sin despliegues sin supervisión | AI_USAGE.md     | 🟡 F0             |
+| ID  | Amenaza                                                                    | Límite | Control                                                                                   | Evidencia       | Estado             |
+| --- | -------------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------- | --------------- | ------------------ |
+| E1  | Un DONANTE llama a rutas de GESTOR (crear o publicar)                      | TB4    | RBAC por `cognito:groups` en `authz`, además del scope                                    | T03             | ✅ F3 / F7 (Cedar) |
+| E2  | Un usuario se asigna a sí mismo un grupo privilegiado                      | TB2    | Grupos solo por administrador; sin atributos de rol editables por el usuario              | Config. Cognito | ⬜ F2              |
+| E3  | Una Lambda comprometida escribe en tablas que no le tocan                  | TB5    | Un rol por función con acciones y ARNs concretos; sin `*` injustificado                   | T10, CA-NF03.1  | ✅ F6              |
+| E4  | Usar la simulación de pago fuera del entorno académico                     | TB4    | La ruta `simulate` solo existe en el stage `academic`                                     | Config. SAM     | ✅ F5              |
+| E5  | Un asistente de IA propone políticas con comodines o actúa sobre la cuenta | TB6    | Reglas de design.md §10: PR revisado por otro integrante, sin despliegues sin supervisión | AI_USAGE.md     | 🟡 F0              |
 
 ## 6. Relación con NIST SP 800-207
 

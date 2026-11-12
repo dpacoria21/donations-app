@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useAuth } from '../auth/context.ts';
+import { PageTitle } from '../components/PageTitle.tsx';
 
 /** Destino de `redirect_uri`: canjea el código (con PKCE) por los tokens y vuelve a la app. */
 export function CallbackPage() {
@@ -19,6 +20,7 @@ export function CallbackPage() {
   if (failed) {
     return (
       <>
+        <PageTitle>Error de inicio de sesión</PageTitle>
         <h1 className="text-2xl font-bold">No se pudo iniciar sesión</h1>
         <p role="alert" className="mt-2 text-red-800">
           El inicio de sesión se canceló o caducó.

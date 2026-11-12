@@ -25,7 +25,7 @@ const DONOR = donorClaims();
 const OTHER_DONOR = donorClaims({ sub: 'b1f0c2d3-0000-4000-8000-000000000002' });
 const VALID = { projectId: PUBLISHED_ID, amountCents: 2_500 };
 
-function setup() {
+function setup(clock: () => string = () => NOW) {
   let counter = 0;
   const newId = () => `00000000-0000-4000-8000-${String(++counter).padStart(12, '0')}`;
   const auditLog = new InMemoryAuditLog();
@@ -36,7 +36,7 @@ function setup() {
   });
   const handlers = createDonationHandlers(repository, {
     projects: () => projects,
-    now: () => NOW,
+    now: clock,
     newId,
     auditRecorder: () => auditLog,
     pseudonymKey: () => 'clave-de-prueba',
@@ -211,6 +211,29 @@ describe('idempotencia (CA-05.4, AD-05)', () => {
     expect(await repository.listByDonor(DONOR.sub ?? '')).toHaveLength(1);
   });
 
+  it('una clave vencida (24 h) que el TTL aún no borró ya no bloquea ni se repite', async () => {
+    let current = NOW;
+    const { handlers, repository } = setup(() => current);
+    await handlers.createDonation(donate(DONOR));
+
+    // Un segundo antes de vencer, sigue vigente: otro cuerpo → 409.
+    current = '2026-11-14T14:59:59.000Z';
+    const before = await handlers.createDonation(
+      donate(DONOR, { body: { ...VALID, amountCents: 9_900 } }),
+    );
+    expect(before.statusCode).toBe(409);
+
+    // Al vencer, cuenta como una clave nueva: crea otra donación, sin repetir la anterior.
+    current = '2026-11-14T15:00:00.000Z';
+    const after = await handlers.createDonation(
+      donate(DONOR, { body: { ...VALID, amountCents: 9_900 } }),
+    );
+    expect(after.statusCode).toBe(201);
+    expect(after.headers?.['idempotency-replayed']).toBeUndefined();
+    const own = await repository.listByDonor(DONOR.sub ?? '');
+    expect(own.map((donation) => donation.amountCents).sort()).toEqual([2_500, 9_900]);
+  });
+
   it('la clave es por usuario: otro donante con la misma clave crea su propia donación', async () => {
     const { handlers } = setup();
     const mine = await handlers.createDonation(donate(DONOR));
@@ -347,7 +370,9 @@ describe('DynamoDB: la transacción de la donación', () => {
     expect(items).toHaveLength(4);
     expect(items[0]?.Put).toMatchObject({
       TableName: 'Idempotency',
-      ConditionExpression: 'attribute_not_exists(pk)',
+      // Una clave vencida que el TTL aún no borró se puede reemplazar.
+      ConditionExpression: 'attribute_not_exists(pk) OR expiresAt <= :now',
+      ExpressionAttributeValues: { ':now': Date.parse(NOW) / 1000 },
     });
     expect(items[1]?.Put).toMatchObject({
       TableName: 'Donations',
@@ -374,13 +399,20 @@ describe('DynamoDB: la transacción de la donación', () => {
 
   it('el registro de idempotencia se lee con lectura consistente', async () => {
     ddb.on(GetCommand).resolves({ Item: write.idempotency });
-    await expect(repository.findIdempotency(write.idempotency.pk)).resolves.toEqual(
-      write.idempotency,
-    );
+    await expect(
+      repository.findIdempotency(write.idempotency.pk, write.idempotency.expiresAt - 1),
+    ).resolves.toEqual(write.idempotency);
     expect(ddb.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
       TableName: 'Idempotency',
       ConsistentRead: true,
     });
+  });
+
+  it('un registro vencido que DynamoDB aún no borró cuenta como inexistente', async () => {
+    ddb.on(GetCommand).resolves({ Item: write.idempotency });
+    await expect(
+      repository.findIdempotency(write.idempotency.pk, write.idempotency.expiresAt),
+    ).resolves.toBeUndefined();
   });
 
   it('sin la tabla de idempotencia, la función no puede crear donaciones', async () => {

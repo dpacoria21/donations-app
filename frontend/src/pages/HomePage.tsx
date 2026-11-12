@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { getJson } from '../api/client.ts';
 import { ProjectProgress } from '../components/ProjectProgress.tsx';
 import { projectKeys, type ProjectList } from '../projects/types.ts';
+import { PageTitle } from '../components/PageTitle.tsx';
 
 /** Catálogo público: solo proyectos PUBLICADO, del más reciente al más antiguo (HU-01). */
 export function HomePage() {
@@ -13,6 +14,7 @@ export function HomePage() {
 
   return (
     <>
+      <PageTitle>Proyectos sociales</PageTitle>
       <h1 className="text-2xl font-bold">Proyectos sociales</h1>
       <p className="mt-2 text-slate-600">
         Campañas de la Fundación AQP-SOLIDARIA. Los montos son simulados.

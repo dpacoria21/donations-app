@@ -36,6 +36,8 @@ tags:
     description: Catálogo público de proyectos sociales (EP-01, EP-04).
   - name: Gestión
     description: Creación, edición y publicación de proyectos por el GESTOR (HU-08).
+  - name: Auditoría
+    description: Consulta de eventos de auditoría (HU-10, extensión). Solo AUDITOR con MFA.
   - name: Donaciones
     description: Donaciones simuladas del donante autenticado (EP-03).
 paths:
@@ -442,6 +444,88 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
+  /v1/audit:
+    get:
+      tags: [Auditoría]
+      operationId: listAuditEvents
+      summary: Eventos de auditoría con filtros por tipo y fecha
+      description: |
+        Solo el grupo AUDITOR (HU-10: CA-10.1). El MFA lo garantiza Cognito: el trigger
+        *pre token generation* no emite tokens a un AUDITOR sin TOTP (HU-11, decisión D5).
+
+        Del más reciente al más antiguo. Con `eventType` se pagina con `cursor`; sin él se
+        devuelven los `limit` eventos más recientes de todos los tipos, sin paginación.
+
+        Cada evento trae `timestamp`, `requestId`, actor seudonimizado, recurso, acción y
+        resultado; nunca tokens, claves, montos ni datos personales (CA-10.2).
+      security:
+        - cognito: [api/audit.read]
+      parameters:
+        - name: eventType
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/AuditEventType"
+        - name: from
+          in: query
+          required: false
+          description: Desde esta fecha (`YYYY-MM-DD`) o instante UTC ISO 8601, incluido.
+          schema:
+            type: string
+          example: "2026-11-12"
+        - name: to
+          in: query
+          required: false
+          description: Hasta esta fecha (todo el día) o instante UTC ISO 8601, incluido.
+          schema:
+            type: string
+          example: "2026-11-14"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: cursor
+          in: query
+          required: false
+          description: Valor `nextCursor` de la página anterior (mismo `eventType`).
+          schema:
+            type: string
+            maxLength: 512
+      responses:
+        "200":
+          description: Página de eventos.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditEventList"
+              example:
+                items:
+                  - eventType: PROJECT_PUBLISH
+                    eventId: 6f1c9a2e-0000-4000-8000-000000000001
+                    timestamp: "2026-11-12T15:00:00.000Z"
+                    requestId: GuUxCg5XiYcEM1g=
+                    actorRef: actor_3QmZ0k1x9aPq2LrT7vWbYc
+                    actorRole: GESTOR
+                    action: projects.publish
+                    resourceRef: project/7a91d0c4-2e5f-4b38-a6c7-1d9e8f2b4a63
+                    outcome: SUCCESS
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
 components:
   securitySchemes:
     cognito:
@@ -763,6 +847,74 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/DonorDonation"
+    AuditEventType:
+      type: string
+      enum:
+        [
+          PROJECT_CREATE,
+          PROJECT_UPDATE,
+          PROJECT_PUBLISH,
+          DONATION_CREATE,
+          DONATION_SIMULATE,
+        ]
+    AuditEvent:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          eventType,
+          eventId,
+          timestamp,
+          requestId,
+          actorRef,
+          actorRole,
+          action,
+          resourceRef,
+          outcome,
+        ]
+      properties:
+        eventType:
+          $ref: "#/components/schemas/AuditEventType"
+        eventId:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        requestId:
+          type: string
+          description: Correlación con los logs de Lambda y de API Gateway.
+        actorRef:
+          type: string
+          description: Seudónimo HMAC del `sub`; no revela la identidad de Cognito.
+        actorRole:
+          type: [string, "null"]
+          description: Grupo con el que actuó.
+        action:
+          type: string
+        resourceRef:
+          type: string
+          description: Por ejemplo `project/<id>` o `donation/<id>`; `-` si el ID era inválido.
+        outcome:
+          type: string
+          enum: [SUCCESS, DENIED, REJECTED]
+        changedFields:
+          type: array
+          description: Solo en ediciones; nombres de los campos, nunca sus valores.
+          items:
+            type: string
+    AuditEventList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEvent"
+        nextCursor:
+          type: string
+          description: Presente si hay más eventos del mismo `eventType`.
     NativeGatewayError:
       type: object
       description: Formato de los errores que API Gateway emite sin invocar a Lambda.

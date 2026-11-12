@@ -10,6 +10,7 @@ import {
 } from '../donations/types.ts';
 import { formatDateTime, formatPen } from '../lib/format.ts';
 import { projectKeys, type ProjectList } from '../projects/types.ts';
+import { PageTitle } from '../components/PageTitle.tsx';
 
 /** Mi cuenta: datos de la sesión e historial propio (HU-07, GET /v1/donations/me). */
 export function AccountPage() {
@@ -200,6 +201,7 @@ function errorMessage(error: Error): string {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <>
+      <PageTitle>{title}</PageTitle>
       <h1 className="text-2xl font-bold">{title}</h1>
       {children}
     </>

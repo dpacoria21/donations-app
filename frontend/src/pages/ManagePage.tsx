@@ -5,6 +5,7 @@ import { useAuth, type SessionUser } from '../auth/context.ts';
 import { SignInPrompt } from '../components/SignInPrompt.tsx';
 import { formatDateTime, formatPen } from '../lib/format.ts';
 import { projectKeys, type Project, type ProjectList } from '../projects/types.ts';
+import { PageTitle } from '../components/PageTitle.tsx';
 
 /** Mensaje que deja el formulario al volver aquí, por ejemplo «Proyecto creado». */
 export interface ManageLocationState {
@@ -48,6 +49,7 @@ function ManagedProjects({ user, notice }: { user: SessionUser; notice?: string 
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-2">
+        <PageTitle>Gestión de proyectos</PageTitle>
         <h1 className="text-2xl font-bold">Gestión de proyectos</h1>
         <Link
           to="/gestion/nuevo"

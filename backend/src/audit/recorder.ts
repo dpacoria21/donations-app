@@ -20,6 +20,12 @@ export class InMemoryAuditLog implements AuditRecorder {
   }
 }
 
+/**
+ * Registro compartido del servidor local: proyectos, donaciones y `GET /v1/audit` ven los mismos
+ * eventos. En Lambda nunca se usa (allí la tabla es obligatoria).
+ */
+export const localAuditLog = new InMemoryAuditLog();
+
 export class DynamoAuditRecorder implements AuditRecorder {
   readonly #client: DynamoDBDocumentClient;
   readonly #tableName: string;
@@ -71,5 +77,5 @@ export function createAuditRecorder(env: NodeJS.ProcessEnv = process.env): Audit
   if (env.AWS_LAMBDA_FUNCTION_NAME) {
     throw new Error('Falta la variable de entorno AUDIT_EVENTS_TABLE');
   }
-  return new InMemoryAuditLog();
+  return localAuditLog;
 }

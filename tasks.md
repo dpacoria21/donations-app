@@ -29,8 +29,8 @@ requirements.md §7.
 | 3    | Proyectos y catálogo                     | Completa  |
 | 4    | Donaciones e idempotencia                | En curso  |
 | 5    | Simulación, concurrencia, MFA y frontend | En curso  |
-| 6    | Endurecimiento y evidencias              | Pendiente |
-| 7    | Extensiones (opcional)                   | Pendiente |
+| 6    | Endurecimiento y evidencias              | En curso  |
+| 7    | Extensiones (opcional)                   | En curso  |
 | 8    | Cierre, entrega y limpieza               | Pendiente |
 
 ¹ Falta solo invitar al resto del equipo a la cuenta AWS con MFA, cuando se sumen (D3).
@@ -410,31 +410,65 @@ frontend). Falta desplegar, publicar la SPA y reunir la evidencia de T08, T13 y 
 
 ## Fase 6 — Endurecimiento y evidencias (día 6)
 
-- [ ] T10: comprobar con IAM Policy Simulator o una prueba controlada que la Lambda de listado
-      no puede escribir en DynamoDB → `AccessDenied` y un error controlado (CA-NF03.1).
-- [ ] Revisar las políticas con IAM Access Analyzer (CA-NF03.2).
-- [ ] Ninguna credencial AWS persistente en el código ni en el CI. Si se despliega desde GitHub
-      Actions, usar OIDC limitado al repositorio y a `main` (CA-NF03.2).
-- [ ] Revisar los logs: sin tokens, secretos ni datos personales (CA-NF01.2).
-- [ ] Capturas de CloudWatch con un caso exitoso y uno rechazado (401/403). Los 401 del
-      authorizer se ven en los logs de acceso de la API (CA-NF07.2).
-- [ ] CloudTrail muestra los cambios de infraestructura (CA-NF07.2).
-- [ ] Rendimiento: con 50 proyectos, el p95 de los GET es de 1.5 s o menos, sin contar el cold
-      start. Registrar el método, la herramienta y las condiciones (CA-NF05.1, CA-NF05.2).
-- [ ] Accesibilidad: catálogo, detalle, donación y confirmación usables a 375 px y con teclado;
-      etiquetas y foco visible; revisión WCAG 2.2 AA (CA-NF06.1, CA-NF06.2).
-- [ ] Demostrar que la UI no es la que autoriza: llamar directamente al API con tokens de otros
-      roles. Lambda valida rol, propietario y reglas de negocio en cada solicitud y no confía en
-      roles, montos ni IDs enviados por el navegador (CA-NF02.2, design.md §9).
+Revisión del stage `academic` desplegado con scripts de solo lectura (`npm run evidence:*`) y
+pruebas automáticas nuevas: 310 de backend y 86 de frontend. Falta solo la medición de
+rendimiento, que necesita cargar 50 proyectos en la tabla compartida.
+
+- [x] T10 con IAM Policy Simulator: el rol de la función de listado solo puede hacer `Query`
+      sobre el GSI; `PutItem`, `UpdateItem`, `DeleteItem`, `BatchWriteItem`, `Scan` y otras
+      tablas → `implicitDeny`. La matriz de escrituras por rol coincide con el diseño
+      (`evidence/T10/iam-report.md`). Prueba controlada: un `AccessDeniedException` responde
+      500 genérico sin ARN ni cuenta, y el log guarda solo `errorName` (CA-NF03.1).
+      `SimulatePrincipalPolicy` no sirve en esta cuenta: también evalúa las SCP de la
+      organización de AWS, que no puede leer, y responde `explicitDeny` a todo; se usa
+      `SimulateCustomPolicy` con las políticas reales de cada rol.
+- [x] IAM Access Analyzer (`ValidatePolicy`) sobre las 33 políticas en línea: **0 hallazgos**.
+      Ningún rol tiene políticas administradas. Comodines solo en los log streams del propio
+      log group y en `userpool/*` del trigger (justificado, decisión D5) (CA-NF03.2).
+- [x] Sin credenciales AWS persistentes: búsqueda de `AKIA…` y `aws_secret_access_key` en el
+      repo sin coincidencias, `.env` ignorado y el CI no usa credenciales ni despliega, así que
+      no necesita OIDC (CA-NF03.2).
+- [x] Logs revisados con CloudWatch Logs Insights en los 13 log groups (14 días): **0
+      coincidencias** de JWT, `Bearer`, correos o contraseñas. Prueba automática: ninguna ruta
+      escribe el token, el correo, el `sub` ni el cuerpo, y cada línea tiene `requestId`,
+      acción, resultado, código y duración (CA-NF01.2, CA-NF07.1).
+- [x] CloudWatch: caso exitoso (200) y rechazado (401/403) en los access logs y `denied` en el
+      log JSON de Lambda, con el resumen por ruta y estado (`evidence/observability/report.md`)
+      (CA-NF07.2).
+- [x] CloudTrail registra cada `CreateChangeSet` y `ExecuteChangeSet` del stack (CA-NF07.2).
+- [ ] Rendimiento con 50 proyectos (CA-NF05.1, CA-NF05.2): el script `npm run evidence:perf`
+      está listo (calentamiento sin contar, 100 solicitudes secuenciales por ruta, p50/p95/p99).
+      Falta ejecutarlo: cargar los proyectos con `npm run seed:projects -- --load`, medir y
+      borrarlos con `--remove-load` (pasos en `docs/pruebas-manuales.md`).
+- [x] Accesibilidad WCAG 2.2 AA (CA-NF06.1, CA-NF06.2): axe-core en CI sobre 8 pantallas y en
+      el navegador (con contraste y tamaño de objetivos) sin violaciones; revisión manual a
+      375 px y con teclado. Se corrigieron el aviso fuera de región, el foco visible y los
+      títulos por página (`docs/accesibilidad.md`).
+- [x] La UI no autoriza: prueba que llama a cada ruta protegida con tokens de los cuatro roles
+      (todos con todos los scopes) y solo el rol correcto pasa; enviar `status`,
+      `confirmedAmountCents`, `donorSub` o `groups` en el cuerpo → 400 (CA-NF02.2).
+- [x] Revisión de Codex del PR de la fase 4: una clave de idempotencia vencida que el TTL aún no
+      borró ahora cuenta como nueva (`attribute_not_exists(pk) OR expiresAt <= :now`).
 
 ## Fase 7 — Extensiones (opcional, solo con el MVP completo)
 
-- [ ] HU-10: `GET /v1/audit` solo para AUDITOR con MFA, con filtros por tipo y fecha
-      (CA-10.1, CA-10.2).
-- [ ] HU-12: expresar en Cedar (`policies/`) las reglas de HU-04, HU-07 y HU-08 y evaluarlas con
-      Amazon Verified Permissions (`IsAuthorized`) desde Lambda (CA-12.1).
-- [ ] HU-12: T03, T09 y T12 pasan igual con el motor externo; comparar la autorización embebida
-      con la externalizada en el informe (CA-12.2).
+- [x] HU-10: `GET /v1/audit` solo para AUDITOR (`api/audit.read` + grupo), con filtros por tipo
+      y por fecha o instante, paginación por tipo con un cursor validado y 400 sin repetir los
+      valores recibidos. Función con solo `dynamodb:Query` sobre AuditEvents. El MFA lo
+      garantiza el trigger de la fase 5. Pantalla «Auditoría» en la SPA (CA-10.1, CA-10.2).
+- [x] HU-12: reglas de HU-04, HU-07 y HU-08 en Cedar (`policies/`, 3 políticas y esquema
+      validados en modo estricto) y Policy Decision Point intercambiable: `embedded` o
+      `verified-permissions` (`IsAuthorized` desde Lambda). La plantilla crea el policy store y
+      sus políticas (copia exacta de `policies/`, comprobada por prueba) y solo da
+      `verifiedpermissions:IsAuthorized` sobre ese store cuando
+      `AuthorizationEngine=verified-permissions` (CA-12.1).
+- [x] HU-12: T03, T09 y T12 pasan igual con los dos motores: la misma matriz de 15 decisiones y
+      las pruebas de handlers se ejecutan con el PDP embebido y con el motor oficial de Cedar
+      (WebAssembly) sobre las políticas reales. Si Verified Permissions falla, el API responde
+      500: nunca permite por defecto (CA-12.2).
+- [ ] Desplegar con `AuthorizationEngine=verified-permissions` y repetir T03, T09 y T12 en
+      Postman para la evidencia en AWS; la comparación embebida frente a externalizada va en el
+      informe (fase 8).
 
 ## Fase 8 — Cierre, entrega y limpieza (día 7)
 
@@ -471,7 +505,7 @@ frontend). Falta desplegar, publicar la SPA y reunir la evidencia de T08, T13 y 
 | T07 | Repite clave con payload distinto         | 409                                | 4    | ✅         | ⬜            |
 | T08 | 10 confirmaciones concurrentes            | Un solo incremento                 | 5    | ✅         | ⬜            |
 | T09 | Donante consulta donación ajena           | 403/404 sin filtración             | 4    | ✅         | ⬜            |
-| T10 | Lambda de listado intenta escribir        | `AccessDenied` y error controlado  | 6    | —          | ⬜            |
+| T10 | Lambda de listado intenta escribir        | `AccessDenied` y error controlado  | 6    | ✅         | ✅            |
 | T11 | ID token o token alterado como Bearer     | 401                                | 2    | —          | ⬜            |
 | T12 | Gestor consulta historial de un donante   | 403/404                            | 4    | ✅         | ✅            |
 | T13 | Token revocado usado antes de expirar     | Aceptado hasta expirar; luego 401  | 5    | —          | ⬜            |

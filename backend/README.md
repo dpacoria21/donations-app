@@ -158,6 +158,7 @@ datos inválidos → 400, editar, meta menor que lo recaudado → 409, publicar,
 | POST   | `/v1/projects`                        | `api/projects.write` + GESTOR                                     | 201 / 400 / 401 / 403             |
 | PATCH  | `/v1/projects/{projectId}`            | `api/projects.write` + GESTOR                                     | 200 / 400 / 401 / 403 / 404 / 409 |
 | PATCH  | `/v1/projects/{projectId}/publish`    | `api/projects.write` + GESTOR                                     | 200 / 401 / 403 / 404 / 409       |
+| GET    | `/v1/audit`                           | `api/audit.read` + AUDITOR (con MFA)                              | 200 / 400 / 401 / 403             |
 
 La edición sigue la decisión D2 de [tasks.md](../tasks.md): título, descripción y meta en
 cualquier estado; la meta nunca por debajo de lo recaudado; no se puede despublicar.
@@ -168,7 +169,8 @@ escribe una línea de log JSON con `requestId`, acción, resultado, código HTTP
 
 **Autorización en dos capas:** API Gateway verifica el access token y el scope de la ruta; la
 Lambda vuelve a exigir un access token (`token_use`), el scope y el grupo, y toma el `sub` solo
-de los claims verificados (CA-04.3).
+de los claims verificados (CA-04.3). En las rutas de HU-04, HU-07 y HU-08 esa decisión la toma
+un Policy Decision Point intercambiable (ver «Autorización externalizada»).
 
 El contrato completo está en [docs/api.yaml](../docs/api.yaml) (OpenAPI 3.1). La prueba
 `test/openapi.test.ts` falla si se añade una ruta sin documentarla o si una respuesta deja de
@@ -187,10 +189,12 @@ backend/
 ├── src/
 │   ├── projects/   # modelo, repositorio (memoria → DynamoDB) y handlers públicos
 │   ├── donations/  # intención con idempotencia, historial y consulta propia
-│   ├── authz/      # identidad, grupos y scopes desde claims del JWT authorizer
+│   ├── audit/      # eventos, seudónimo, registro y consulta (HU-10)
+│   ├── identity/   # trigger pre token generation (MFA, HU-11)
+│   ├── authz/      # identidad desde claims y PDP: embebido o Verified Permissions (HU-12)
 │   └── shared/     # errores, respuestas HTTP y logger JSON
 ├── dev/            # API local para Postman y el frontend (no se despliega)
-├── scripts/        # build con esbuild y carga de datos de prueba
+├── scripts/        # build, datos de prueba, alta de MFA y scripts de evidencia
 ├── postman/        # colección y entornos de Postman (local y academic)
 └── test/           # pruebas Vitest, incluida la revisión de infra/template.yaml
 ```
@@ -208,7 +212,10 @@ ni se piden datos de pago (CA-05.5). Exige la cabecera `Idempotency-Key` (UUID):
    evento de auditoría y comprueba que el proyecto siga PUBLICADO. De varias solicitudes
    simultáneas con la misma clave, solo una crea la donación y las demás repiten su respuesta.
 
-Los registros de idempotencia caducan a las 24 h (TTL `expiresAt`).
+Los registros de idempotencia caducan a las 24 h (TTL `expiresAt`). Como el TTL de DynamoDB
+puede tardar en borrarlos, un registro vencido se trata como inexistente al leerlo, y la
+condición de escritura es `attribute_not_exists(pk) OR expiresAt <= :now`: pasadas las 24 h,
+la misma clave cuenta como nueva (observación de la revisión de Codex en el PR de la fase 4).
 
 ## Simulación de pagos (solo stage `academic`)
 
@@ -257,7 +264,47 @@ un proyecto (CA-08.3), en la tabla `AuditEvents` (PK `eventType`, SK `timestamp#
 Para ver los eventos tras desplegar, en la consola: **DynamoDB → Tables →
 donations-academic-AuditEventsTable-… → Explore items**.
 
-## Pendiente
+Desde la fase 7, el AUDITOR los consulta con `GET /v1/audit` (HU-10): filtros `eventType`,
+`from` y `to` (fecha `YYYY-MM-DD` o instante ISO, extremos incluidos), `limit` (1–100, por
+defecto 50) y `cursor` para paginar un tipo. Sin tipo devuelve los más recientes de todos. Un
+parámetro desconocido o inválido → 400 que nombra el parámetro sin repetir su valor. La función
+solo tiene `dynamodb:Query` sobre la tabla y no puede escribir ni borrar eventos.
 
-- Donaciones: intención, idempotencia y simulación (fases 4 y 5).
-- Consulta de auditoría para el AUDITOR (`GET /v1/audit`, extensión HU-10).
+## Autorización externalizada (HU-12)
+
+[src/authz/pdp.ts](src/authz/pdp.ts) define un _Policy Decision Point_ (PE de NIST SP 800-207)
+con dos motores que aplican las mismas reglas de HU-04, HU-07 y HU-08:
+
+| `AUTHZ_ENGINE`         | Motor                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------- |
+| `embedded` (defecto)   | RBAC + ownership en código (MVP)                                                                  |
+| `verified-permissions` | Amazon Verified Permissions con las políticas Cedar de [policies/](../policies/) (`IsAuthorized`) |
+
+- La solicitud a Cedar se arma solo con claims verificados (`sub`, `cognito:groups`, `scope`)
+  y, para una donación, con el propietario guardado en DynamoDB, nunca con datos del cliente.
+- Si Verified Permissions falla, el handler responde 500: nunca se permite por defecto.
+- [test/authz-engines.test.ts](test/authz-engines.test.ts) valida las políticas contra el
+  esquema en modo estricto y ejecuta T03, T09, T12 y una matriz de 15 decisiones con los dos
+  motores; el motor Cedar de las pruebas es el oficial (WebAssembly), sin llamar a AWS.
+- La plantilla siempre crea el policy store (sin solicitudes no cuesta nada). Para usarlo:
+
+  ```bash
+  sam deploy --parameter-overrides AuthorizationEngine=verified-permissions
+  ```
+
+  Solo entonces los roles de las 6 funciones afectadas reciben
+  `verifiedpermissions:IsAuthorized` sobre ese policy store.
+
+## Evidencias (fase 6)
+
+Scripts de **solo lectura** contra el stack desplegado (con `aws login` hecho y
+`AWS_PROFILE=donations-dev`); el ID de la cuenta sale como `<cuenta>`:
+
+| Script                           | Qué genera                                                                          |
+| -------------------------------- | ----------------------------------------------------------------------------------- |
+| `npm run evidence:iam`           | T10 con IAM Policy Simulator, escrituras por rol y Access Analyzer                  |
+| `npm run evidence:observability` | Retención, búsqueda de secretos en logs, casos 2xx y 401/403, cambios en CloudTrail |
+| `npm run evidence:perf`          | p50/p95/p99 de los GET públicos (CA-NF05; necesita `API_URL`)                       |
+| `npm run evidence:t08`           | T08: 10 confirmaciones concurrentes                                                 |
+
+Las salidas se guardan en [evidence/](../evidence/README.md).
