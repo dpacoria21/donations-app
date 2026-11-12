@@ -1,1 +1,12 @@
 @import 'tailwindcss';
+
+/*
+ * Foco visible y uniforme en cualquier control al navegar con teclado (WCAG 2.2: 2.4.7 y
+ * 2.4.13). Los componentes pueden cambiar el color con `focus-visible:outline-*`.
+ */
+@layer base {
+  :focus-visible {
+    outline: 3px solid var(--color-sky-700);
+    outline-offset: 2px;
+  }
+}

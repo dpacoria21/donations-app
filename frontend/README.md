@@ -61,10 +61,16 @@ del app client (parámetros `CallbackUrls` y `LogoutUrls` de `infra/template.yam
 | `/gestion/nuevo`             | GESTOR: crear un borrador                                                           |
 | `/gestion/:projectId/editar` | GESTOR: editar título, descripción y meta (decisión D2)                             |
 | `/cuenta`                    | Datos de la sesión e historial propio (HU-07)                                       |
+| `/auditoria`                 | AUDITOR: eventos de auditoría con filtros por tipo y fecha (HU-10)                  |
 | `/auth/callback`             | Destino del managed login; canjea el código por tokens                              |
 
-El enlace «Gestión» solo aparece para usuarios del grupo GESTOR, pero eso es solo orientación:
-el API rechaza con 403 a cualquier otro rol, y la interfaz muestra ese error tal cual.
+Los enlaces «Gestión» y «Auditoría» solo aparecen para los grupos GESTOR y AUDITOR, pero eso
+es solo orientación: el API rechaza con 403 a cualquier otro rol, y la interfaz muestra ese
+error tal cual.
+
+**Accesibilidad:** `src/a11y.test.tsx` ejecuta axe-core (WCAG 2.2 A/AA) sobre cada pantalla en
+CI. La revisión completa, con contraste, 375 px y teclado, está en
+[docs/accesibilidad.md](../docs/accesibilidad.md).
 
 ## Comandos
 

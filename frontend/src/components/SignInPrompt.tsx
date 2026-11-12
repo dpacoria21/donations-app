@@ -1,4 +1,5 @@
 import { useAuth } from '../auth/context.ts';
+import { PageTitle } from './PageTitle.tsx';
 
 /** Estados previos a una página que requiere sesión. Devuelve `null` si ya hay usuario. */
 export function SignInPrompt({ title, message }: { title: string; message: string }) {
@@ -7,6 +8,7 @@ export function SignInPrompt({ title, message }: { title: string; message: strin
 
   return (
     <>
+      <PageTitle>{title}</PageTitle>
       <h1 className="text-2xl font-bold">{title}</h1>
       {!configured && (
         <p className="mt-2 text-slate-700">

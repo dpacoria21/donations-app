@@ -14,14 +14,19 @@ const ManagePage = lazy(() =>
 const ProjectFormPage = lazy(() =>
   import('./pages/ProjectFormPage.tsx').then((module) => ({ default: module.ProjectFormPage })),
 );
+// Consulta de auditoría (HU-10), solo para AUDITOR.
+const AuditPage = lazy(() =>
+  import('./pages/AuditPage.tsx').then((module) => ({ default: module.AuditPage })),
+);
 
 const navLink = ({ isActive }: { isActive: boolean }) =>
   `rounded px-2 py-1 ${isActive ? 'font-semibold text-sky-900 underline' : 'text-sky-800 hover:underline'}`;
 
 export function App() {
   const { user } = useAuth();
-  // Solo orienta la navegación: el API exige el grupo GESTOR en cada solicitud.
+  // Solo orienta la navegación: el API exige el grupo en cada solicitud.
   const isManager = user?.groups.includes('GESTOR') ?? false;
+  const isAuditor = user?.groups.includes('AUDITOR') ?? false;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -31,28 +36,36 @@ export function App() {
       >
         Saltar al contenido
       </a>
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-3">
-        <Link to="/" className="font-bold text-sky-800">
-          Fundación AQP-SOLIDARIA
-        </Link>
-        <nav aria-label="Principal" className="flex flex-wrap items-center gap-2">
-          <NavLink to="/" end className={navLink}>
-            Proyectos
-          </NavLink>
-          {isManager && (
-            <NavLink to="/gestion" className={navLink}>
-              Gestión
+      {/* El aviso va dentro del banner: todo el contenido queda en una región (WCAG 1.3.1). */}
+      <header className="border-b border-slate-200 bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+          <Link to="/" className="font-bold text-sky-800">
+            Fundación AQP-SOLIDARIA
+          </Link>
+          <nav aria-label="Principal" className="flex flex-wrap items-center gap-2">
+            <NavLink to="/" end className={navLink}>
+              Proyectos
             </NavLink>
-          )}
-          <NavLink to="/cuenta" className={navLink}>
-            Mi cuenta
-          </NavLink>
-          <SessionButton />
-        </nav>
+            {isManager && (
+              <NavLink to="/gestion" className={navLink}>
+                Gestión
+              </NavLink>
+            )}
+            {isAuditor && (
+              <NavLink to="/auditoria" className={navLink}>
+                Auditoría
+              </NavLink>
+            )}
+            <NavLink to="/cuenta" className={navLink}>
+              Mi cuenta
+            </NavLink>
+            <SessionButton />
+          </nav>
+        </div>
+        <p role="note" className="bg-amber-100 px-4 py-2 text-sm font-semibold text-amber-900">
+          Prototipo académico: las donaciones son simuladas y no se realiza ningún cobro.
+        </p>
       </header>
-      <p role="note" className="bg-amber-100 px-4 py-2 text-sm font-semibold text-amber-900">
-        Prototipo académico: las donaciones son simuladas y no se realiza ningún cobro.
-      </p>
       <main id="contenido" tabIndex={-1} className="mx-auto max-w-3xl px-4 py-6">
         <Suspense
           fallback={
@@ -67,6 +80,7 @@ export function App() {
             <Route path="/gestion" element={<ManagePage />} />
             <Route path="/gestion/nuevo" element={<ProjectFormPage mode="create" />} />
             <Route path="/gestion/:projectId/editar" element={<ProjectFormPage mode="edit" />} />
+            <Route path="/auditoria" element={<AuditPage />} />
             <Route path="/auth/callback" element={<CallbackPage />} />
             <Route path="/cuenta" element={<AccountPage />} />
             <Route path="*" element={<NotFoundPage />} />
