@@ -36,3 +36,12 @@ export function idempotencyPk(donorSub: string, idempotencyKey: string): string 
 
 /** Los registros de idempotencia caducan a las 24 h (TTL de DynamoDB, en segundos). */
 export const IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
+
+/**
+ * Cuerpo de `POST /v1/donations/{donationId}/simulate` (HU-06): el resultado simulado. No hay
+ * pasarela de pago: la persona elige confirmar o rechazar su propia donación pendiente.
+ */
+export const simulateDonationSchema = z.strictObject({
+  outcome: z.enum(['CONFIRMADA_SIMULADA', 'RECHAZADA_SIMULADA']),
+});
+export type SimulationOutcome = z.infer<typeof simulateDonationSchema>['outcome'];

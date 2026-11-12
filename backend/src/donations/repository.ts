@@ -10,6 +10,7 @@ import type { AuditEvent } from '../audit/model.ts';
 import { InMemoryAuditLog } from '../audit/recorder.ts';
 import type { ProjectStatus } from '../projects/model.ts';
 import { DONATION_STATUSES, type Donation } from './model.ts';
+import type { SimulationOutcome } from './schemas.ts';
 
 /** Registro de idempotencia (requirements.md §4, design.md §5). */
 export interface IdempotencyRecord {
@@ -44,13 +45,32 @@ export interface DonationRepository {
   findIdempotency(pk: string): Promise<IdempotencyRecord | undefined>;
   /** Un único `TransactWriteItems` condicionado (AD-05, CA-05.4). */
   createWithIdempotency(write: CreateDonationWrite): Promise<CreateDonationResult>;
+  /**
+   * HU-06: PENDIENTE_SIMULACION → resultado, solo si sigue pendiente y es del `donorSub`. Si se
+   * confirma, la misma transacción suma el monto al proyecto (CA-06.2, CA-NF04.2).
+   */
+  simulate(write: SimulateDonationWrite): Promise<SimulateDonationResult>;
 }
+
+export interface SimulateDonationWrite {
+  /** La donación tal como se leyó (pendiente). */
+  donation: Donation;
+  outcome: SimulationOutcome;
+  now: string;
+  audit: AuditEvent;
+}
+
+/** `NOT_PENDING`: otra solicitud la simuló antes o ya no está pendiente (409). */
+export type SimulateDonationResult =
+  { ok: true; donation: Donation } | { ok: false; reason: 'NOT_PENDING' };
 
 const newestFirst = (a: Donation, b: Donation) => b.createdAt.localeCompare(a.createdAt);
 
 export interface InMemoryDonationOptions {
   /** Estado actual de un proyecto, para imitar el `ConditionCheck` de la transacción. */
   projectStatus?: (projectId: string) => Promise<ProjectStatus | undefined>;
+  /** Suma una confirmación al acumulado del proyecto (en memoria, de forma síncrona). */
+  addConfirmed?: (projectId: string, amountCents: number) => void;
   auditLog?: InMemoryAuditLog;
 }
 
@@ -58,12 +78,32 @@ export class InMemoryDonationRepository implements DonationRepository {
   readonly #donations: Map<string, Donation>;
   readonly #idempotency = new Map<string, IdempotencyRecord>();
   readonly #projectStatus: (projectId: string) => Promise<ProjectStatus | undefined>;
+  readonly #addConfirmed: (projectId: string, amountCents: number) => void;
   readonly #auditLog: InMemoryAuditLog;
 
   constructor(donations: readonly Donation[] = [], options: InMemoryDonationOptions = {}) {
     this.#donations = new Map(donations.map((donation) => [donation.donationId, { ...donation }]));
     this.#projectStatus = options.projectStatus ?? (() => Promise.resolve('PUBLICADO'));
+    this.#addConfirmed = options.addConfirmed ?? (() => undefined);
     this.#auditLog = options.auditLog ?? new InMemoryAuditLog();
+  }
+
+  async simulate(write: SimulateDonationWrite): Promise<SimulateDonationResult> {
+    const current = this.#donations.get(write.donation.donationId);
+    // Comprobación y cambio sin `await` entre medio: igual que la condición de DynamoDB.
+    if (
+      current?.status !== 'PENDIENTE_SIMULACION' ||
+      current.donorSub !== write.donation.donorSub
+    ) {
+      return { ok: false, reason: 'NOT_PENDING' };
+    }
+    const updated: Donation = { ...current, status: write.outcome, updatedAt: write.now };
+    this.#donations.set(updated.donationId, updated);
+    if (write.outcome === 'CONFIRMADA_SIMULADA') {
+      this.#addConfirmed(updated.projectId, updated.amountCents);
+    }
+    await this.#auditLog.record(write.audit);
+    return { ok: true, donation: { ...updated } };
   }
 
   listByDonor(donorSub: string): Promise<Donation[]> {
@@ -235,6 +275,66 @@ export class DynamoDonationRepository implements DonationRepository {
       if (reasons[2]?.Code === 'ConditionalCheckFailed') return 'PROJECT_NOT_PUBLISHED';
       throw error;
     }
+  }
+
+  /**
+   * Una sola transacción (CA-NF04.2): la donación cambia solo si sigue PENDIENTE_SIMULACION y es
+   * del `donorSub`; si se confirma, `ADD` suma el monto al proyecto; y se guarda el evento. Si
+   * llegan 10 confirmaciones a la vez, DynamoDB acepta solo la primera: las demás fallan la
+   * condición y no suman nada (CA-06.2, T08). Un rechazo no toca el proyecto (CA-06.3).
+   */
+  async simulate(write: SimulateDonationWrite): Promise<SimulateDonationResult> {
+    const { donation, outcome, now } = write;
+    const items: NonNullable<
+      ConstructorParameters<typeof TransactWriteCommand>[0]['TransactItems']
+    > = [
+      {
+        Update: {
+          TableName: this.#tables.donations,
+          Key: { donationId: donation.donationId },
+          UpdateExpression: 'SET #status = :outcome, updatedAt = :now',
+          ConditionExpression: '#status = :pending AND donorSub = :sub',
+          ExpressionAttributeNames: { '#status': 'status' },
+          ExpressionAttributeValues: {
+            ':outcome': outcome,
+            ':pending': 'PENDIENTE_SIMULACION',
+            ':sub': donation.donorSub,
+            ':now': now,
+          },
+        },
+      },
+    ];
+    if (outcome === 'CONFIRMADA_SIMULADA') {
+      items.push({
+        Update: {
+          TableName: this.#required('projects'),
+          Key: { projectId: donation.projectId },
+          UpdateExpression: 'ADD confirmedAmountCents :amount',
+          ConditionExpression: 'attribute_exists(projectId)',
+          ExpressionAttributeValues: { ':amount': donation.amountCents },
+        },
+      });
+    }
+    items.push({
+      Put: {
+        TableName: this.#required('audit'),
+        Item: write.audit,
+        ConditionExpression: 'attribute_not_exists(eventType)',
+      },
+    });
+
+    try {
+      await this.#client.send(new TransactWriteCommand({ TransactItems: items }));
+    } catch (error) {
+      if (
+        error instanceof TransactionCanceledException &&
+        error.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed'
+      ) {
+        return { ok: false, reason: 'NOT_PENDING' };
+      }
+      throw error;
+    }
+    return { ok: true, donation: { ...donation, status: outcome, updatedAt: now } };
   }
 
   #required(table: 'idempotency' | 'projects' | 'audit'): string {

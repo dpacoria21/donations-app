@@ -13,8 +13,10 @@ Parameters:
   StageName:
     Type: String
     Default: academic
-    AllowedValues: [academic]
-    Description: Stage de API Gateway. La simulación de pagos solo existe en `academic`.
+    AllowedValues: [academic, prod]
+    Description: >-
+      Stage de API Gateway. La simulación de pagos solo existe en `academic` (CA-06.1); con
+      `prod` la plantilla no crea esa ruta ni su función.
   AllowedOrigins:
     Type: CommaDelimitedList
     Default: http://localhost:5173
@@ -32,6 +34,11 @@ Parameters:
     Default: 14
     AllowedValues: [1, 3, 5, 7, 14]
     Description: Retención de CloudWatch Logs; como máximo 14 días (CA-NF07.1).
+
+Conditions:
+  # La simulación de pagos (HU-06) solo se despliega en el stage académico (CA-06.1).
+  IsAcademicStage:
+    Fn::Equals: [{ Ref: StageName }, academic]
 
 Globals:
   Function:
@@ -172,6 +179,14 @@ Resources:
       # el procedimiento de alta (decisión D5).
       MfaConfiguration: OPTIONAL
       EnabledMfas: [SOFTWARE_TOKEN_MFA]
+      # Sin TOTP, un GESTOR o AUDITOR no obtiene tokens (HU-11, T14). Ver PreTokenGenerationFunction.
+      LambdaConfig:
+        PreTokenGenerationConfig:
+          LambdaArn: !GetAtt PreTokenGenerationFunction.Arn
+          LambdaVersion: V1_0
+      # Un cambio de correo no se aplica hasta verificar el nuevo (protege la cuenta).
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate: [email]
       AccountRecoverySetting:
         RecoveryMechanisms:
           - Name: verified_email
@@ -243,8 +258,21 @@ Resources:
         - api/donations.write
         - api/donations.read
         - api/audit.read
-      CallbackURLs: !Ref CallbackUrls
-      LogoutURLs: !Ref LogoutUrls
+      # Las URLs del parámetro (local y Postman) más las de la SPA publicada en CloudFront.
+      CallbackURLs:
+        Fn::Split:
+          - ","
+          - Fn::Join:
+              - ","
+              - - Fn::Join: [",", { Ref: CallbackUrls }]
+                - !Sub https://${SpaDistribution.DomainName}/auth/callback
+      LogoutURLs:
+        Fn::Split:
+          - ","
+          - Fn::Join:
+              - ","
+              - - Fn::Join: [",", { Ref: LogoutUrls }]
+                - !Sub https://${SpaDistribution.DomainName}/
       SupportedIdentityProviders: [COGNITO]
       # Sin flujos de contraseña directos: el login pasa siempre por managed login.
       ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH]
@@ -258,6 +286,86 @@ Resources:
         RefreshToken: hours
       EnableTokenRevocation: true
       PreventUserExistenceErrors: ENABLED
+
+  # Cliente para el alta de MFA (`npm run setup:mfa`): sin OAuth, solo usuario y contraseña,
+  # tokens de 5 minutos. Sus tokens no sirven para el API: el JWT authorizer solo acepta el
+  # client_id de la SPA.
+  MfaSetupClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub ${AWS::StackName}-mfa-setup
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: false
+      ExplicitAuthFlows: [ALLOW_USER_PASSWORD_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      AccessTokenValidity: 5
+      IdTokenValidity: 5
+      RefreshTokenValidity: 60
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: minutes
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+
+  # Trigger pre token generation: bloquea los tokens de GESTOR y AUDITOR sin TOTP (HU-11).
+  PreTokenGenerationLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-pre-token-generation
+      RetentionInDays: !Ref LogRetentionDays
+
+  PreTokenGenerationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Trigger de Cognito. Solo cognito-idp:AdminGetUser para leer los métodos MFA.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt PreTokenGenerationLogGroup.Arn
+        # Comodín justificado (CA-NF03.2): el pool referencia a esta función como trigger, así
+        # que el rol no puede referenciar el ARN del pool sin crear una dependencia circular.
+        # Se limita a una sola acción de lectura, en esta cuenta y esta Región.
+        - PolicyName: read-user-mfa-settings
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [cognito-idp:AdminGetUser]
+                Resource: !Sub arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*
+
+  PreTokenGenerationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-pre-token-generation
+      Description: Trigger pre token generation de Cognito (HU-11, T14)
+      CodeUri: ../backend/dist/identity
+      Handler: handlers.preTokenGeneration
+      Role: !GetAtt PreTokenGenerationRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref PreTokenGenerationLogGroup
+
+  # Solo este user pool puede invocar el trigger.
+  PreTokenGenerationPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt PreTokenGenerationFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
 
   # Managed login (versión 2) necesita un estilo por app client; se usa el de Cognito.
   WebClientBranding:
@@ -293,7 +401,14 @@ Resources:
               audience:
                 - !Ref WebClient
       CorsConfiguration:
-        AllowOrigins: !Ref AllowedOrigins
+        # Los orígenes del parámetro (desarrollo local) más la SPA publicada en CloudFront.
+        AllowOrigins:
+          Fn::Split:
+            - ","
+            - Fn::Join:
+                - ","
+                - - Fn::Join: [",", { Ref: AllowedOrigins }]
+                  - !Sub https://${SpaDistribution.DomainName}
         AllowMethods: [GET, POST, PATCH, OPTIONS]
         AllowHeaders: [authorization, content-type, idempotency-key]
         MaxAge: 600
@@ -957,7 +1072,224 @@ Resources:
               Authorizer: CognitoJwt
               AuthorizationScopes: [api/donations.read]
 
+  # ---------------------------------------------------------------------------------------
+  # Simulación de pagos (HU-06). Función, rol y log group solo existen en el stage academic.
+  # ---------------------------------------------------------------------------------------
+  SimulateDonationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: IsAcademicStage
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-simulate-donation
+      RetentionInDays: !Ref LogRetentionDays
+
+  # Una transacción cambia la donación (condicionada a PENDIENTE y al donorSub), suma al
+  # proyecto con ADD si se confirma y guarda el evento (CA-06.2, CA-NF04.2).
+  SimulateDonationRole:
+    Type: AWS::IAM::Role
+    Condition: IsAcademicStage
+    Properties:
+      Description: POST /v1/donations/{donationId}/simulate. Donations (lectura y UpdateItem), Projects (UpdateItem) y AuditEvents (PutItem).
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt SimulateDonationLogGroup.Arn
+        - PolicyName: simulate-donation
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:UpdateItem]
+                Resource: !GetAtt DonationsTable.Arn
+        - PolicyName: add-confirmed-amount
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:UpdateItem]
+                Resource: !GetAtt ProjectsTable.Arn
+        - PolicyName: write-audit-events
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:PutItem]
+                Resource: !GetAtt AuditEventsTable.Arn
+
+  SimulateDonationFunction:
+    Type: AWS::Serverless::Function
+    Condition: IsAcademicStage
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-simulate-donation
+      Description: POST /v1/donations/{donationId}/simulate (HU-06, solo stage academic)
+      CodeUri: ../backend/dist/donations
+      Handler: handlers.simulateDonation
+      Role: !GetAtt SimulateDonationRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref SimulateDonationLogGroup
+      Environment:
+        Variables:
+          DONATIONS_TABLE: !Ref DonationsTable
+          PROJECTS_TABLE: !Ref ProjectsTable
+          AUDIT_EVENTS_TABLE: !Ref AuditEventsTable
+          AUDIT_PSEUDONYM_KEY: !Ref AWS::StackId
+      Events:
+        SimulateDonation:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: POST
+            Path: /v1/donations/{donationId}/simulate
+            Auth:
+              Authorizer: CognitoJwt
+              AuthorizationScopes: [api/donations.write]
+
+  # ---------------------------------------------------------------------------------------
+  # Publicación del frontend: S3 privado + CloudFront con OAC, solo HTTPS (CA-NF01.1) y
+  # cabeceras de seguridad (CA-NF11.2). CloudFront es global; S3 queda en esta Región.
+  # ---------------------------------------------------------------------------------------
+  SpaBucket:
+    Type: AWS::S3::Bucket
+    # Para `sam delete` hay que vaciarlo antes (ver backend/README.md).
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  SpaOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub ${AWS::StackName}-spa-oac
+        Description: CloudFront firma cada lectura del bucket; el bucket no es público.
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Solo esta distribución puede leer los archivos de la SPA.
+  SpaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SpaBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub ${SpaBucket.Arn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${SpaDistribution}
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt SpaBucket.Arn
+              - !Sub ${SpaBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # CSP restrictiva (CA-NF11.2): solo scripts y estilos propios, sin estilos ni scripts en
+  # línea. connect-src admite el API (execute-api de esta Región: el ID exacto crearía una
+  # dependencia circular con CloudFront) y los endpoints de Cognito para el login.
+  SpaSecurityHeaders:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub ${AWS::StackName}-security-headers
+        Comment: CSP, HSTS, nosniff, Referrer-Policy y anti-clickjacking para la SPA.
+        SecurityHeadersConfig:
+          ContentSecurityPolicy:
+            Override: true
+            ContentSecurityPolicy: !Sub "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://*.execute-api.${AWS::Region}.amazonaws.com https://cognito-idp.${AWS::Region}.amazonaws.com https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
+          StrictTransportSecurity:
+            Override: true
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+          ContentTypeOptions:
+            Override: true
+          ReferrerPolicy:
+            Override: true
+            ReferrerPolicy: strict-origin-when-cross-origin
+          FrameOptions:
+            Override: true
+            FrameOption: DENY
+
+  SpaDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub ${AWS::StackName} SPA
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        # Solo Norteamérica y Europa: la clase más barata (suficiente para la demo).
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: spa-bucket
+            DomainName: !GetAtt SpaBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt SpaOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: spa-bucket
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          Compress: true
+          # Política administrada CachingOptimized.
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId: !Ref SpaSecurityHeaders
+        # Rutas de la SPA (/cuenta, /gestion…): S3 responde 403/404 y se sirve index.html.
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
 Outputs:
+  SpaUrl:
+    Description: URL pública HTTPS de la SPA (CloudFront).
+    Value: !Sub https://${SpaDistribution.DomainName}
+  SpaBucketName:
+    Description: Bucket privado donde se suben los archivos de frontend/dist.
+    Value: !Ref SpaBucket
+  SpaDistributionId:
+    Description: ID de la distribución, para invalidar la caché tras publicar.
+    Value: !Ref SpaDistribution
   ApiUrl:
     Description: URL base del API (baseUrl del entorno de Postman y VITE_API_BASE_URL).
     Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}
@@ -967,6 +1299,9 @@ Outputs:
   UserPoolClientId:
     Description: COGNITO_CLIENT_ID del backend y VITE_COGNITO_CLIENT_ID del frontend.
     Value: !Ref WebClient
+  MfaSetupClientId:
+    Description: COGNITO_MFA_SETUP_CLIENT_ID para `npm run setup:mfa`.
+    Value: !Ref MfaSetupClient
   CognitoIssuer:
     Description: VITE_COGNITO_AUTHORITY del frontend (emisor OIDC).
     Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}

@@ -4,7 +4,11 @@ import { createAuditor, memoize } from '../audit/auditor.ts';
 import { getPseudonymKey } from '../audit/model.ts';
 import { createAuditRecorder, type AuditRecorder } from '../audit/recorder.ts';
 import { getIdentity, requireGroup, requireScope, SCOPES } from '../authz/identity.ts';
-import { getProjectRepository, type ProjectRepository } from '../projects/repository.ts';
+import {
+  getProjectRepository,
+  InMemoryProjectRepository,
+  type ProjectRepository,
+} from '../projects/repository.ts';
 import { parseJsonBody } from '../shared/body.ts';
 import { badRequest, conflict, notFound } from '../shared/errors.ts';
 import { json, withHttp, type HttpResult } from '../shared/http.ts';
@@ -17,6 +21,7 @@ import {
   idempotencyKeySchema,
   idempotencyPk,
   payloadHash,
+  simulateDonationSchema,
 } from './schemas.ts';
 
 type DonorEvent = APIGatewayProxyEventV2WithJWTAuthorizer;
@@ -28,6 +33,8 @@ export interface DonationHandlerOptions {
   newId?: () => string;
   auditRecorder?: () => AuditRecorder;
   pseudonymKey?: () => string;
+  /** Stage de API Gateway; la simulación solo existe en `academic` (CA-06.1). */
+  stage?: () => string;
 }
 
 const DONATION_NOT_FOUND = 'Donación no encontrada';
@@ -53,6 +60,7 @@ export function createDonationHandlers(
   const now = options.now ?? (() => new Date().toISOString());
   const newId = options.newId ?? randomUUID;
   const projects = memoize(options.projects ?? getProjectRepository);
+  const stage = options.stage ?? (() => process.env.STAGE ?? 'academic');
   const audited = createAuditor({
     now,
     newId,
@@ -178,13 +186,65 @@ export function createDonationHandlers(
       if (donation?.donorSub !== identity.sub) throw notFound(DONATION_NOT_FOUND);
       return json(200, toDonorDonation(donation));
     }),
+
+    /**
+     * POST /v1/donations/{donationId}/simulate (HU-06): la persona confirma o rechaza su propia
+     * donación pendiente. Solo existe en el stage `academic` (CA-06.1): la plantilla no crea la
+     * ruta en otro stage y, por si acaso, el handler responde 404 fuera de él.
+     */
+    simulateDonation: withHttp('donations.simulate', async (event: DonorEvent) => {
+      if (stage() !== 'academic') throw notFound('Ruta no encontrada');
+      const target = event.pathParameters?.donationId;
+      return audited(
+        event,
+        {
+          eventType: 'DONATION_SIMULATE',
+          action: 'donations.simulate',
+          failureResourceRef: () =>
+            donationIdSchema.safeParse(target).success
+              ? `donation/${String(target)}`
+              : 'donation/-',
+        },
+        async (identity, audit) => {
+          requireScope(identity, SCOPES.donationsWrite);
+          requireGroup(identity, 'DONANTE');
+          const id = donationIdSchema.safeParse(target);
+          if (!id.success) throw notFound(DONATION_NOT_FOUND);
+          const { outcome } = parseJsonBody(event, simulateDonationSchema);
+
+          // Ownership contra el registro guardado (CA-NF02.2): una ajena es 404, como en D1.
+          const donation = await repository.findById(id.data);
+          if (donation?.donorSub !== identity.sub) throw notFound(DONATION_NOT_FOUND);
+          if (donation.status !== 'PENDIENTE_SIMULACION') {
+            throw conflict('La donación ya fue simulada');
+          }
+
+          const result = await repository.simulate({
+            donation,
+            outcome,
+            now: now(),
+            // Sin montos: solo el recurso y el resultado de la operación (CA-10.2).
+            audit: audit.success(`donation/${donation.donationId}`, ['status']),
+          });
+          // Otra solicitud la simuló entre la lectura y la escritura: no se suma dos veces.
+          if (!result.ok) throw conflict('La donación ya fue simulada');
+          return json(200, toDonorDonation(result.donation));
+        },
+      );
+    }),
   };
 }
 
 // Puntos de entrada de Lambda; cada función tiene su propio rol IAM en SAM. En local, las
 // donaciones en memoria consultan el estado de los proyectos de prueba.
-export const { createDonation, getMyDonations, getDonation } = createDonationHandlers(
-  getDonationRepository({
-    projectStatus: async (projectId) => (await getProjectRepository().findById(projectId))?.status,
-  }),
-);
+export const { createDonation, getMyDonations, getDonation, simulateDonation } =
+  createDonationHandlers(
+    getDonationRepository({
+      projectStatus: async (projectId) =>
+        (await getProjectRepository().findById(projectId))?.status,
+      addConfirmed: (projectId, amountCents) => {
+        const local = getProjectRepository();
+        if (local instanceof InMemoryProjectRepository) local.addConfirmed(projectId, amountCents);
+      },
+    }),
+  );

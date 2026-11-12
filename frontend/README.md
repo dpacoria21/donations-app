@@ -2,7 +2,7 @@
 
 SPA de la Plataforma de Donaciones Seguras: **React 19 + TypeScript + Vite 8 + Tailwind CSS 4**,
 según [design.md](../design.md) §2. En AWS se publicará en un bucket S3 privado detrás de
-CloudFront con OAC (fase 5).
+CloudFront con OAC (ver «Publicar en CloudFront»).
 
 Hoy incluye el **catálogo y el detalle de proyectos** con montos en PEN, el **inicio y cierre de
 sesión con Cognito**, la página **Mi cuenta** con el historial propio y las **pantallas del
@@ -85,3 +85,49 @@ Cada intención lleva una `Idempotency-Key` propia: si la respuesta no llega y s
 enviar el mismo monto, se reutiliza la clave y el API devuelve la misma donación en lugar de
 crear otra. Con otro monto o tras un registro exitoso, la siguiente intención usa una clave
 nueva. La confirmación simulada llega en la fase 5.
+
+## Publicar en CloudFront (HTTPS)
+
+La plantilla crea un bucket S3 **privado** y una distribución CloudFront que lo lee con OAC,
+solo por HTTPS y con una política de cabeceras de seguridad: CSP restrictiva (sin scripts ni
+estilos en línea), HSTS, `X-Content-Type-Options`, `Referrer-Policy` y `X-Frame-Options`.
+La URL de la SPA ya está registrada en el app client de Cognito y en el CORS del API.
+
+1. Crear `frontend/.env.production.local` (ignorado por Git) con las salidas de la pila:
+
+   ```text
+   VITE_API_BASE_URL=<ApiUrl>
+   VITE_COGNITO_AUTHORITY=<CognitoIssuer>
+   VITE_COGNITO_CLIENT_ID=<UserPoolClientId>
+   VITE_COGNITO_DOMAIN=<CognitoDomain>
+   VITE_COGNITO_REDIRECT_URI=<SpaUrl>/auth/callback
+   VITE_COGNITO_LOGOUT_URI=<SpaUrl>/
+   ```
+
+2. Compilar y subir: los archivos con hash se guardan en caché un año; `index.html`, nunca.
+
+   ```bash
+   npm run build
+   ```
+
+   ```bash
+   aws s3 sync dist s3://<SpaBucketName> --delete --exclude index.html --cache-control "public,max-age=31536000,immutable" --profile donations-dev
+   ```
+
+   ```bash
+   aws s3 cp dist/index.html s3://<SpaBucketName>/index.html --cache-control "no-cache" --profile donations-dev
+   ```
+
+3. Invalidar la caché de CloudFront:
+
+   ```bash
+   aws cloudfront create-invalidation --distribution-id <SpaDistributionId> --paths "/*" --profile donations-dev
+   ```
+
+4. Abrir `<SpaUrl>` y comprobar las cabeceras en las herramientas del navegador (pestaña
+   Network → documento → Response Headers).
+
+Antes de `sam delete`, vaciar el bucket con `aws s3 rm s3://<SpaBucketName> --recursive`.
+
+La CSP se probó en local sirviendo `dist/` con la misma cabecera: la app, el login y las
+llamadas al API funcionan sin violaciones.

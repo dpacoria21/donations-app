@@ -28,7 +28,7 @@ requirements.md §7.
 | 2    | Infraestructura base y autenticación     | Completa² |
 | 3    | Proyectos y catálogo                     | Completa  |
 | 4    | Donaciones e idempotencia                | En curso  |
-| 5    | Simulación, concurrencia, MFA y frontend | Pendiente |
+| 5    | Simulación, concurrencia, MFA y frontend | En curso  |
 | 6    | Endurecimiento y evidencias              | Pendiente |
 | 7    | Extensiones (opcional)                   | Pendiente |
 | 8    | Cierre, entrega y limpieza               | Pendiente |
@@ -347,41 +347,66 @@ frontend). Falta desplegar y repetir las pruebas contra el stage.
 
 ## Fase 5 — Simulación, concurrencia, MFA y publicación del frontend (día 5)
 
+Código, plantilla, OpenAPI, Postman y procedimientos listos (202 pruebas de backend, 71 de
+frontend). Falta desplegar, publicar la SPA y reunir la evidencia de T08, T13 y T14 en AWS.
+
 ### Backend
 
-- [ ] HU-06: `POST /v1/donations/{donationId}/simulate`: DONANTE propietario. Solo existe en el stage
-      `academic` mediante una `Condition` de SAM; en otro stage la ruta no existe (CA-06.1).
-- [ ] Un `TransactWriteItems` actualiza la donación con la condición
-      `status = PENDIENTE_SIMULACION AND donorSub = :sub`. Si se confirma, la misma transacción
-      incrementa `confirmedAmountCents` (CA-06.2, CA-NF04.2).
-- [ ] Una transición inválida o repetida → 409. Un rechazo no suma al acumulado (CA-06.2,
+- [x] HU-06: `POST /v1/donations/{donationId}/simulate`: DONANTE propietario, con
+      `{ outcome: CONFIRMADA_SIMULADA | RECHAZADA_SIMULADA }`. Solo existe en el stage
+      `academic` mediante `Condition: IsAcademicStage` (función, rol y log group); con
+      `StageName=prod` la ruta no existe, y el handler responde 404 fuera de `academic` (CA-06.1).
+- [x] Un `TransactWriteItems` actualiza la donación con la condición
+      `status = PENDIENTE_SIMULACION AND donorSub = :sub`; si se confirma, la misma transacción
+      hace `ADD confirmedAmountCents` en el proyecto y guarda el evento `DONATION_SIMULATE`
+      (CA-06.2, CA-NF04.2).
+- [x] Una transición inválida o repetida → 409. Un rechazo no suma al acumulado (CA-06.2,
       CA-06.3).
-- [ ] Documentar por qué se eligió `TransactWriteItems` condicionado (CA-NF04.2).
+- [x] Documentado en `backend/README.md` por qué se eligió `TransactWriteItems` condicionado
+      (CA-NF04.2).
+- [ ] Desplegar y ejecutar en Postman «HU-06 — Confirmar» y «Simular otra vez → 409».
 
 ### Identidad
 
-- [ ] Activar TOTP en las cuentas de prueba de GESTOR y AUDITOR antes de asignarles el grupo, y
-      comprobar que no pueden desactivarlo (CA-11.1). Ver la decisión D5.
+- [x] MFA obligatorio para GESTOR y AUDITOR con el trigger _pre token generation_: sin TOTP
+      activo, Cognito no emite tokens; también corre al renovar, así que desactivar el MFA corta
+      la sesión (CA-11.1, CA-11.2, decisión D5).
+- [x] Alta de MFA con `npm run setup:mfa` (app client sin OAuth y tokens de 5 min) antes de
+      asignar el grupo; procedimiento en `docs/pruebas-manuales.md`.
+- [x] `gestor1` dado de alta con MFA (2026-11-14): sin grupo, `setup:mfa`, verificado
+      `SOFTWARE_TOKEN_MFA` y grupo GESTOR reasignado.
+- [ ] Dar de alta con MFA a un AUDITOR de prueba.
 - [ ] Demostrar que revocar el refresh token impide renovar la sesión, mientras que el access
-      token emitido sigue valiendo hasta expirar (CA-03.3, CA-03.4).
+      token emitido sigue valiendo hasta expirar (CA-03.3, CA-03.4). Procedimiento en
+      `docs/pruebas-manuales.md`.
 
 ### Pruebas de la fase
 
-- [ ] T08: 10 confirmaciones concurrentes de la misma donación → un solo incremento (CA-06.2,
-      CA-NF04.1).
+- [x] T08 automatizada: 10 confirmaciones concurrentes → un solo 200 y un solo incremento. Una
+      prueba de mutación confirmó que falla sin la condición de estado (CA-06.2, CA-NF04.1).
+- [ ] T08 contra el stage con `npm run evidence:t08` y guardar la salida en `evidence/T08/`.
 - [ ] T13: token revocado usado antes de expirar → aceptado; después de expirar → rechazado
       (CA-03.4).
-- [ ] T14: un GESTOR sin segundo factor no obtiene tokens. Guardar la captura (CA-11.2).
+- [x] T14 automatizada: el trigger rechaza a GESTOR y AUDITOR sin TOTP (y sin aceptar SMS).
+- [ ] T14 contra el stage: un GESTOR sin segundo factor no obtiene tokens. Guardar la captura
+      (CA-11.2).
 
 ### Frontend y publicación
 
-- [ ] Pantalla de simulación con el texto exacto «Simulación académica: no se ha realizado
+- [x] Simulación en «Mi cuenta»: botones «Simular confirmación» y «Simular rechazo» en las
+      donaciones pendientes, con el texto exacto «Simulación académica: no se ha realizado
       ningún cobro» (CA-06.4).
-- [ ] Aviso de prototipo académico: un despliegue real exigiría una evaluación legal según la
-      Ley N.º 29733 (CA-NF10.2).
-- [ ] S3 privado y CloudFront con OAC, solo HTTPS (CA-NF01.1).
-- [ ] Response headers policy de CloudFront con CSP restrictiva, HSTS,
-      `X-Content-Type-Options` y `Referrer-Policy` (CA-NF11.2).
+- [x] Aviso de prototipo académico en el pie de página: un despliegue real exigiría una
+      evaluación legal según la Ley N.º 29733 (CA-NF10.2).
+- [x] S3 privado (bloqueo público, cifrado, solo TLS) y CloudFront con OAC, solo HTTPS
+      (CA-NF01.1). La URL de la SPA se registra sola en Cognito y en el CORS del API.
+- [x] Response headers policy de CloudFront con CSP restrictiva (sin `unsafe-inline`), HSTS,
+      `X-Content-Type-Options`, `Referrer-Policy` y `X-Frame-Options` (CA-NF11.2). La barra de
+      avance pasó a `<progress>` para no necesitar estilos en línea; la CSP se probó en local
+      sin violaciones.
+- [x] SPA publicada en CloudFront (2026-11-14): `/` y las rutas internas responden 200, HTTP
+      redirige a HTTPS (301), el bucket no es accesible directamente (403) y las cabeceras de
+      seguridad están presentes.
 
 ## Fase 6 — Endurecimiento y evidencias (día 6)
 
@@ -444,13 +469,13 @@ frontend). Falta desplegar y repetir las pruebas contra el stage.
 | T05 | Donante crea intención válida             | 201, pendiente, sin cargo          | 4    | ✅         | ⬜            |
 | T06 | Repite clave y payload idénticos          | Mismo resultado, una sola donación | 4    | ✅         | ⬜            |
 | T07 | Repite clave con payload distinto         | 409                                | 4    | ✅         | ⬜            |
-| T08 | 10 confirmaciones concurrentes            | Un solo incremento                 | 5    | ⬜         | ⬜            |
+| T08 | 10 confirmaciones concurrentes            | Un solo incremento                 | 5    | ✅         | ⬜            |
 | T09 | Donante consulta donación ajena           | 403/404 sin filtración             | 4    | ✅         | ⬜            |
 | T10 | Lambda de listado intenta escribir        | `AccessDenied` y error controlado  | 6    | —          | ⬜            |
 | T11 | ID token o token alterado como Bearer     | 401                                | 2    | —          | ⬜            |
 | T12 | Gestor consulta historial de un donante   | 403/404                            | 4    | ✅         | ✅            |
 | T13 | Token revocado usado antes de expirar     | Aceptado hasta expirar; luego 401  | 5    | —          | ⬜            |
-| T14 | GESTOR inicia sesión sin segundo factor   | No obtiene tokens                  | 5    | —          | ⬜            |
+| T14 | GESTOR inicia sesión sin segundo factor   | No obtiene tokens                  | 5    | ✅         | ⬜            |
 
 «—» indica que la prueba depende de API Gateway, IAM o Cognito y solo se puede demostrar contra
 AWS.
@@ -485,8 +510,11 @@ Conviene acordarlas con el docente antes de la fase indicada.
   servidor local imita los 403. Opciones: aceptar 403 como «rechazado» y documentarlo, o
   quitar los scopes del authorizer y validarlos solo en Lambda (contradice design.md §4).
   Confirmar con el docente tras medir el código real en el stage desplegado.
-- **D5 (fase 5):** en Cognito, el MFA obligatorio se configura para todo el pool, no por grupo.
-  Con el MFA opcional, hay que garantizar el TOTP en GESTOR y AUDITOR por procedimiento de alta
-  y demostrarlo en T14.
+- **D5 (fase 5) — Decidida el 2026-11-14:** Cognito solo permite MFA obligatorio para todo
+  el pool, y ya no se puede activar en un pool existente. Se mantiene el MFA opcional (TOTP)
+  y un trigger _pre token generation_ rechaza la emisión de tokens a GESTOR y AUDITOR sin
+  TOTP activo. El alta se hace con `npm run setup:mfa` antes de asignar el grupo. Limitación:
+  el rol del trigger usa `userpool/*` (solo `AdminGetUser`) para evitar la dependencia
+  circular con el pool.
 - **D6:** confirmar con el docente la fecha de entrega. El plan es de una semana desde el
   2026-11-02.

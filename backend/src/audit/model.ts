@@ -6,6 +6,7 @@ export const AUDIT_EVENT_TYPES = [
   'PROJECT_UPDATE',
   'PROJECT_PUBLISH',
   'DONATION_CREATE',
+  'DONATION_SIMULATE',
 ] as const;
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
 

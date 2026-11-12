@@ -19,3 +19,5 @@ export const donationKeys = {
   all: ['donations'] as const,
   mine: (sub: string) => ['donations', 'me', sub] as const,
 };
+
+export type SimulationOutcome = 'CONFIRMADA_SIMULADA' | 'RECHAZADA_SIMULADA';

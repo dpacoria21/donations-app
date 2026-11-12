@@ -1,8 +1,13 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
-import { ApiError, getJson } from '../api/client.ts';
+import { ApiError, getJson, sendJson } from '../api/client.ts';
 import { useAuth, type SessionUser } from '../auth/context.ts';
-import { donationKeys, STATUS_LABELS, type DonorDonation } from '../donations/types.ts';
+import {
+  donationKeys,
+  STATUS_LABELS,
+  type DonorDonation,
+  type SimulationOutcome,
+} from '../donations/types.ts';
 import { formatDateTime, formatPen } from '../lib/format.ts';
 import { projectKeys, type ProjectList } from '../projects/types.ts';
 
@@ -76,11 +81,41 @@ function MyDonations({ user }: { user: SessionUser }) {
   const titleOf = (projectId: string) =>
     catalog.data?.items.find((project) => project.projectId === projectId)?.title;
 
+  // HU-06: confirmar o rechazar una donación propia pendiente (solo stage academic).
+  const queryClient = useQueryClient();
+  const simulate = useMutation({
+    mutationFn: ({ donationId, outcome }: { donationId: string; outcome: SimulationOutcome }) =>
+      sendJson<DonorDonation>('POST', `/v1/donations/${donationId}/simulate`, {
+        accessToken: user.accessToken,
+        body: { outcome },
+      }),
+    // El historial y los montos confirmados del catálogo cambian juntos.
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: donationKeys.all }),
+        queryClient.invalidateQueries({ queryKey: projectKeys.all }),
+      ]),
+  });
+
   return (
     <section aria-labelledby="historial" className="mt-6">
       <h2 id="historial" className="text-lg font-semibold">
         Historial de donaciones
       </h2>
+      <p role="note" className="mt-1 text-sm text-amber-900">
+        Simulación académica: no se ha realizado ningún cobro.
+      </p>
+      {simulate.isSuccess && (
+        <p role="status" className="mt-2 rounded bg-emerald-50 px-3 py-2 text-emerald-900">
+          Donación {STATUS_LABELS[simulate.data.status].toLowerCase()}. Simulación académica: no se
+          ha realizado ningún cobro.
+        </p>
+      )}
+      {simulate.isError && (
+        <p role="alert" className="mt-2 rounded bg-red-50 px-3 py-2 text-red-800">
+          No se pudo simular: {simulate.error.message}
+        </p>
+      )}
       {query.isPending && (
         <p role="status" className="mt-2">
           Cargando historial…
@@ -119,6 +154,31 @@ function MyDonations({ user }: { user: SessionUser }) {
                 <p className="font-semibold">{formatPen(donation.amountCents)}</p>
                 <p className="text-sm">{STATUS_LABELS[donation.status]}</p>
               </div>
+              {donation.status === 'PENDIENTE_SIMULACION' && (
+                <div className="flex flex-wrap gap-2 sm:col-span-2">
+                  {(
+                    [
+                      ['CONFIRMADA_SIMULADA', 'Simular confirmación', 'bg-emerald-700'],
+                      ['RECHAZADA_SIMULADA', 'Simular rechazo', 'bg-slate-600'],
+                    ] as const
+                  ).map(([outcome, label, color]) => (
+                    <button
+                      key={outcome}
+                      type="button"
+                      disabled={simulate.isPending}
+                      onClick={() => {
+                        simulate.mutate({ donationId: donation.donationId, outcome });
+                      }}
+                      aria-label={`${label} de ${formatPen(donation.amountCents)} a ${
+                        titleOf(donation.projectId) ?? 'este proyecto'
+                      }`}
+                      className={`rounded px-3 py-1 text-sm font-semibold text-white disabled:opacity-60 ${color}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </li>
           ))}
         </ul>

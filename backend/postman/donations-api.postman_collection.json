@@ -956,6 +956,65 @@
               }
             }
           ]
+        },
+        {
+          "name": "HU-06 — Confirmar la donación creada",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/donations/{{donationId}}/simulate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"outcome\": \"CONFIRMADA_SIMULADA\"\n}"
+            },
+            "description": "CA-06.1 · CA-06.2: confirma la donación de T05. Revisar luego que /stats del proyecto subió 25.00."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('CONFIRMADA_SIMULADA', () => pm.expect(pm.response.json().status).to.eql('CONFIRMADA_SIMULADA'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "HU-06 — Simular otra vez → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/donations/{{donationId}}/simulate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"outcome\": \"CONFIRMADA_SIMULADA\"\n}"
+            },
+            "description": "CA-06.2: una segunda simulación no altera el total. Para T08 completo, ejecutar esta request 10 veces en paralelo con el Runner o el script de evidence/."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409: no se suma dos veces (T08)', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
         }
       ]
     }
