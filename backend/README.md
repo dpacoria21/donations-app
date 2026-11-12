@@ -42,6 +42,7 @@ npm run check        # lint + formato + typecheck + tests + build
 | `npm run dev`          | Servidor local con recarga automática                          |
 | `npm start`            | Servidor local sin recarga                                     |
 | `npm run lint`         | ESLint con reglas estrictas de typescript-eslint               |
+| `npm run lint:api`     | Valida el contrato OpenAPI `../docs/api.yaml` con Redocly      |
 | `npm run format:check` | Comprueba el formato con Prettier (`npm run format` lo aplica) |
 | `npm run typecheck`    | `tsc --noEmit`                                                 |
 | `npm test`             | Pruebas con Vitest                                             |
@@ -77,6 +78,16 @@ Cuando exista el stage desplegado, se añadirá otro entorno con su `baseUrl`.
 Los errores usan el formato `{ code, message, requestId }`, y cada solicitud escribe una
 línea de log JSON con `requestId`, acción, resultado, código HTTP y duración.
 
+El contrato completo está en [docs/api.yaml](../docs/api.yaml) (OpenAPI 3.1). La prueba
+`test/openapi.test.ts` falla si se añade una ruta sin documentarla o si una respuesta deja de
+coincidir con su esquema.
+
+## CI
+
+[.github/workflows/ci.yml](../.github/workflows/ci.yml) ejecuta, en cada PR y push a `main`,
+`npm ci`, `npm audit` (producción: falla desde `moderate`; todo: falla desde `high`) y
+`npm run check`, para el backend y el frontend.
+
 ## Estructura
 
 ```text
@@ -95,4 +106,3 @@ backend/
 - Repositorio DynamoDB y plantilla SAM (`infra/template.yaml`) con un rol IAM por función.
 - Cognito (PKCE, grupos, MFA TOTP) y rutas protegidas con scopes.
 - Módulos `donations` (intención, idempotencia, simulación, historial) y `audit`.
-- CI en GitHub Actions ejecutando `npm run check`.

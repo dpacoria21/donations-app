@@ -17,13 +17,15 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "esbuild src/projects/handlers.ts --bundle --platform=node --target=node24 --format=esm --sourcemap --outdir=dist/projects --out-extension:.js=.mjs",
-    "check": "npm run lint && npm run format:check && npm run typecheck && npm run test && npm run build"
+    "lint:api": "redocly lint ../docs/api.yaml",
+    "check": "npm run lint && npm run lint:api && npm run format:check && npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@redocly/cli": "2.77.0",
     "@types/aws-lambda": "8.10.164",
     "@types/node": "24.19.2",
     "esbuild": "0.28.2",
@@ -32,6 +34,7 @@
     "prettier": "3.10.0",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.2",
-    "vitest": "5.1.0"
+    "vitest": "5.1.0",
+    "yaml": "2.9.1"
   }
 }

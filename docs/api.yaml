@@ -1,0 +1,274 @@
+openapi: 3.1.0
+info:
+  title: Plataforma de Donaciones Seguras — API
+  version: 0.1.0
+  summary: API de donaciones simuladas de la Fundación AQP-SOLIDARIA (prototipo académico).
+  description: |
+    Contrato del API descrito en design.md §4. Las donaciones son **simuladas**: el API no
+    solicita ni almacena datos de pago (CA-05.5).
+
+    - Montos en céntimos enteros de PEN (`*AmountCents`); nunca `float` (AD-04).
+    - Los errores de los handlers usan el formato uniforme `Error` (`{ code, message, requestId }`)
+      sin detalles internos. Los rechazos que emite API Gateway antes de llegar a Lambda (por
+      ejemplo, el 401 del JWT authorizer) usan el formato nativo de HTTP API.
+    - Las rutas protegidas se añadirán en la fase 2 con un esquema de seguridad OAuth 2.0 de
+      Cognito (access token con los scopes `api/projects.write`, `api/donations.write`,
+      `api/donations.read` y `api/audit.read`; CA-NF02.1).
+
+    Este archivo se amplía en cada fase (tasks.md). La prueba `backend/test/openapi.test.ts`
+    comprueba que cada ruta implementada esté documentada aquí.
+  license:
+    name: Uso académico
+    identifier: CC-BY-4.0
+servers:
+  - url: http://127.0.0.1:3000
+    description: API local de desarrollo (backend, npm run dev)
+  - url: https://{apiId}.execute-api.us-east-2.amazonaws.com/academic
+    description: Stage académico en API Gateway HTTP API (fase 2)
+    variables:
+      apiId:
+        default: pendiente
+        description: Identificador de la HTTP API tras `sam deploy`.
+tags:
+  - name: Proyectos
+    description: Catálogo público de proyectos sociales (EP-01, EP-04).
+paths:
+  /v1/projects:
+    get:
+      tags: [Proyectos]
+      operationId: listProjects
+      summary: Listar proyectos publicados
+      description: |
+        Solo devuelve proyectos `PUBLICADO`, del más reciente al más antiguo. Si no hay
+        ninguno, `items` es una lista vacía (HU-01: CA-01.1, CA-01.2, CA-01.3; T01).
+      security: []
+      responses:
+        "200":
+          description: Catálogo público.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectList"
+              example:
+                items:
+                  - projectId: 7a91d0c4-2e5f-4b38-a6c7-1d9e8f2b4a63
+                    title: Comedor popular de Alto Selva Alegre
+                    description: Raciones diarias de almuerzo para familias del comedor comunitario.
+                    goalAmountCents: 800000
+                    confirmedAmountCents: 612550
+                    currency: PEN
+                    status: PUBLICADO
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /v1/projects/{projectId}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      tags: [Proyectos]
+      operationId: getProject
+      summary: Consultar el detalle de un proyecto publicado
+      description: |
+        Un identificador inexistente, mal formado o de un proyecto no publicado devuelve 404
+        sin revelar contenido (HU-02: CA-02.1, CA-02.2).
+      security: []
+      responses:
+        "200":
+          description: Detalle público del proyecto, sin datos de donantes.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicProject"
+        "404":
+          $ref: "#/components/responses/ProjectNotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /v1/projects/{projectId}/stats:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      tags: [Proyectos]
+      operationId: getProjectStats
+      summary: Indicadores agregados de un proyecto publicado
+      description: |
+        Solo cifras agregadas del monto **confirmado simulado**; las donaciones pendientes y
+        rechazadas no suman. No expone donantes ni registros individuales (HU-09: CA-09.1,
+        CA-09.2).
+      security: []
+      responses:
+        "200":
+          description: Indicadores agregados.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectStats"
+              example:
+                projectId: 7a91d0c4-2e5f-4b38-a6c7-1d9e8f2b4a63
+                goalAmountCents: 800000
+                confirmedAmountCents: 612550
+                currency: PEN
+                progressPercent: 76
+        "404":
+          $ref: "#/components/responses/ProjectNotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+components:
+  parameters:
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      description: Identificador UUID del proyecto.
+      schema:
+        type: string
+        format: uuid
+  headers:
+    NoStore:
+      description: Las respuestas del API no se almacenan en caché.
+      schema:
+        type: string
+        const: no-store
+  responses:
+    ProjectNotFound:
+      description: El proyecto no existe, no está publicado o el identificador es inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: NOT_FOUND
+            message: Proyecto no encontrado
+            requestId: 2eee4fce-bdb1-498b-b467-6c24572eed51
+    TooManyRequests:
+      description: |
+        Límite de throttling del stage de API Gateway superado (design.md §6.2). Lo emite API
+        Gateway antes de llegar a Lambda, con su formato nativo.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+          example:
+            message: Too Many Requests
+    InternalError:
+      description: Error inesperado. No incluye detalles internos.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: INTERNAL
+            message: Error interno
+            requestId: 2eee4fce-bdb1-498b-b467-6c24572eed51
+  schemas:
+    Currency:
+      type: string
+      const: PEN
+    AmountCents:
+      type: integer
+      minimum: 0
+      description: Importe en céntimos enteros de PEN.
+    ProjectStatus:
+      type: string
+      enum: [BORRADOR, PUBLICADO]
+    PublicProject:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          projectId,
+          title,
+          description,
+          goalAmountCents,
+          confirmedAmountCents,
+          currency,
+          status,
+        ]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+          description: Finalidad del proyecto.
+        goalAmountCents:
+          $ref: "#/components/schemas/AmountCents"
+        confirmedAmountCents:
+          $ref: "#/components/schemas/AmountCents"
+        currency:
+          $ref: "#/components/schemas/Currency"
+        status:
+          $ref: "#/components/schemas/ProjectStatus"
+    ProjectList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PublicProject"
+    ProjectStats:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          projectId,
+          goalAmountCents,
+          confirmedAmountCents,
+          currency,
+          progressPercent,
+        ]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        goalAmountCents:
+          $ref: "#/components/schemas/AmountCents"
+        confirmedAmountCents:
+          $ref: "#/components/schemas/AmountCents"
+        currency:
+          $ref: "#/components/schemas/Currency"
+        progressPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message, requestId]
+      properties:
+        code:
+          type: string
+          enum:
+            [
+              BAD_REQUEST,
+              UNAUTHORIZED,
+              FORBIDDEN,
+              NOT_FOUND,
+              CONFLICT,
+              INTERNAL,
+            ]
+        message:
+          type: string
+        requestId:
+          type: string
+          description: Identificador de la solicitud para correlacionar con los logs (CA-NF07.1).

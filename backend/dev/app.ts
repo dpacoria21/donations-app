@@ -23,8 +23,8 @@ export interface DevServerOptions {
   allowedOrigins?: readonly string[];
 }
 
-// Mismas rutas que declarará la plantilla SAM (design.md §4).
-const ROUTES: readonly Route[] = [
+// Mismas rutas que declarará la plantilla SAM (design.md §4) y que documenta docs/api.yaml.
+export const ROUTES: readonly Route[] = [
   {
     method: 'GET',
     routeKey: 'GET /v1/projects',
