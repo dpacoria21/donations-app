@@ -1,5 +1,8 @@
 # Configuración de AWS SAM CLI para el stage académico. Se ejecuta desde infra/:
-#   cd infra && sam validate && sam deploy
+#   cd infra
+#   sam validate
+#   sam deploy
+# (Windows PowerShell 5.1 no admite `&&`: ejecutar cada comando por separado.)
 # Antes de desplegar: `npm run build` en backend/ (la plantilla toma ../backend/dist).
 # No ejecutar `sam build`: el código ya llega empaquetado por esbuild.
 version = 0.1

@@ -82,10 +82,13 @@ aws login --region us-east-2 --profile donations-dev
    confirmación):
 
    ```bash
-   cd ../infra && sam validate && sam deploy
+   cd ../infra
+   sam validate
+   sam deploy
    ```
 
-   No ejecutar `sam build`: el código ya llega empaquetado por esbuild.
+   Un comando por línea: Windows PowerShell 5.1 no admite `&&`. No ejecutar `sam build`: el
+   código ya llega empaquetado por esbuild.
 
 3. Cargar los proyectos de prueba con el valor de la salida `ProjectsTableName`: copiarlo en
    `PROJECTS_TABLE` de `.env` y ejecutar `npm run seed:projects`.
@@ -93,7 +96,7 @@ aws login --region us-east-2 --profile donations-dev
    `ApiUrl` (`baseUrl`), `CognitoDomain` (`cognitoDomain`) y `UserPoolClientId`
    (`cognitoClientId`), y ejecutar la colección.
 
-Para eliminar todo: `cd infra && sam delete`. Las tablas, el user pool y los log groups se
+Para eliminar todo: `sam delete` desde `infra/`. Las tablas, el user pool y los log groups se
 borran con la pila.
 
 ### Usuarios de prueba (Cognito)

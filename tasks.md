@@ -147,8 +147,17 @@ Parte 1 de la fase: la plantilla está escrita y validada (`sam validate --lint`
       de servir datos ficticios.
 - [x] `npm run build` empaqueta los handlers con esbuild (ESM, minificado, con el AWS SDK
       dentro) y `npm run seed:projects` carga los proyectos de prueba en la tabla.
-- [ ] Primer `sam deploy` (lo ejecuta una persona del equipo), `npm run seed:projects` y
-      comprobar los endpoints públicos por HTTPS con Postman (CA-NF01.1).
+- [x] Primer `sam deploy` de la pila `donations-academic` en `us-east-2` (2026-11-12, lo
+      ejecutó el propietario): 31 recursos en `CREATE_COMPLETE`.
+- [x] Comprobado por HTTPS: `GET /v1/projects` → 200 (lee DynamoDB con su rol), proyecto
+      inexistente → 404, preflight CORS desde `localhost:5173` → 204, y el endpoint no responde
+      por HTTP sin TLS (CA-NF01.1). La Lambda de listado escribe su log JSON en su log group.
+- [x] `npm run seed:projects`: el stage devuelve los proyectos publicados desde DynamoDB.
+- [x] Login de punta a punta en la SPA contra el user pool desplegado: inicio de sesión, «Mi
+      cuenta», pérdida de tokens al recargar y cierre de sesión que vuelve a pedir la
+      contraseña.
+- [ ] Ejecutar la colección de Postman completa contra el stage y guardar el reporte en
+      `evidence/`.
 
 ### Identidad (Cognito): HU-03, HU-04 y HU-11
 
@@ -184,9 +193,10 @@ Parte 2 de la fase: definido en `infra/template.yaml` y probado en
       Gateway (`backend/test/dev-server.test.ts`).
 - [x] T11 automatizada en el servidor local: token alterado → 401; ID token → 403 (pasa la
       firma pero no tiene scopes) y, si llegara a la Lambda, 401 por `token_use`.
-- [ ] T02 y T11 contra el stage desplegado con la carpeta «Donaciones (protegido)» de Postman,
-      incluidos el token vencido y el de otro app client. Anotar el código real del ID token
-      para la decisión D4.
+- [x] T02 y T11 (token alterado) contra el stage desplegado: 401 `{"message":"Unauthorized"}`
+      del JWT authorizer, sin invocar la Lambda.
+- [ ] T11 con el ID token, un token vencido y uno de otro app client, con Postman y usuarios
+      reales. Anotar el código real del ID token para la decisión D4.
 
 ### Frontend
 
@@ -200,7 +210,9 @@ Parte 2 de la fase: definido en `infra/template.yaml` y probado en
       memoria y cerrar la sesión del managed login (`/logout`) (CA-03.3).
 - [x] Página «Mi cuenta» con el historial propio (`GET /v1/donations/me`) y mensajes para
       401 y 403. El retorno tras el login solo acepta rutas internas.
-- [ ] Probar el login de punta a punta contra el user pool desplegado.
+- [x] Login de punta a punta contra el user pool desplegado. Al recargar se pierden los
+      tokens, pero la cookie del managed login (~1 h) permite volver a entrar sin contraseña
+      hasta cerrar sesión. Mencionarlo en el informe junto a CA-03.4.
 
 ## Fase 3 — Proyectos y catálogo (día 3)
 
