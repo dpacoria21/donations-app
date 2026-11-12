@@ -232,6 +232,15 @@ Evidencia de T08 contra el stage desplegado:
 API_URL=<ApiUrl> ACCESS_TOKEN=<token de DONANTE> DONATION_ID=<id pendiente> npm run evidence:t08
 ```
 
+## MFA para GESTOR y AUDITOR (HU-11)
+
+El pool tiene MFA opcional (TOTP, nunca SMS), y el trigger _pre token generation_
+([src/identity/handlers.ts](src/identity/handlers.ts)) lo vuelve obligatorio para los grupos
+GESTOR y AUDITOR: si el usuario no tiene TOTP activo, Cognito no emite tokens (T14). Como corre
+también al renovar, desactivar el MFA corta la sesión. El alta se hace con
+`npm run setup:mfa` **antes** de asignar el grupo; el procedimiento completo, junto con T13 y
+T14, está en [docs/pruebas-manuales.md](../docs/pruebas-manuales.md).
+
 ## Auditoría
 
 [src/audit/](src/audit/model.ts) registra un evento por cada creación, edición o publicación de

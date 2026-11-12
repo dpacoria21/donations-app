@@ -179,6 +179,14 @@ Resources:
       # el procedimiento de alta (decisión D5).
       MfaConfiguration: OPTIONAL
       EnabledMfas: [SOFTWARE_TOKEN_MFA]
+      # Sin TOTP, un GESTOR o AUDITOR no obtiene tokens (HU-11, T14). Ver PreTokenGenerationFunction.
+      LambdaConfig:
+        PreTokenGenerationConfig:
+          LambdaArn: !GetAtt PreTokenGenerationFunction.Arn
+          LambdaVersion: V1_0
+      # Un cambio de correo no se aplica hasta verificar el nuevo (protege la cuenta).
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate: [email]
       AccountRecoverySetting:
         RecoveryMechanisms:
           - Name: verified_email
@@ -265,6 +273,86 @@ Resources:
         RefreshToken: hours
       EnableTokenRevocation: true
       PreventUserExistenceErrors: ENABLED
+
+  # Cliente para el alta de MFA (`npm run setup:mfa`): sin OAuth, solo usuario y contraseña,
+  # tokens de 5 minutos. Sus tokens no sirven para el API: el JWT authorizer solo acepta el
+  # client_id de la SPA.
+  MfaSetupClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub ${AWS::StackName}-mfa-setup
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: false
+      ExplicitAuthFlows: [ALLOW_USER_PASSWORD_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      AccessTokenValidity: 5
+      IdTokenValidity: 5
+      RefreshTokenValidity: 60
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: minutes
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+
+  # Trigger pre token generation: bloquea los tokens de GESTOR y AUDITOR sin TOTP (HU-11).
+  PreTokenGenerationLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-pre-token-generation
+      RetentionInDays: !Ref LogRetentionDays
+
+  PreTokenGenerationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Trigger de Cognito. Solo cognito-idp:AdminGetUser para leer los métodos MFA.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt PreTokenGenerationLogGroup.Arn
+        # Comodín justificado (CA-NF03.2): el pool referencia a esta función como trigger, así
+        # que el rol no puede referenciar el ARN del pool sin crear una dependencia circular.
+        # Se limita a una sola acción de lectura, en esta cuenta y esta Región.
+        - PolicyName: read-user-mfa-settings
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [cognito-idp:AdminGetUser]
+                Resource: !Sub arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*
+
+  PreTokenGenerationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-pre-token-generation
+      Description: Trigger pre token generation de Cognito (HU-11, T14)
+      CodeUri: ../backend/dist/identity
+      Handler: handlers.preTokenGeneration
+      Role: !GetAtt PreTokenGenerationRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref PreTokenGenerationLogGroup
+
+  # Solo este user pool puede invocar el trigger.
+  PreTokenGenerationPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt PreTokenGenerationFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
 
   # Managed login (versión 2) necesita un estilo por app client; se usa el de Cognito.
   WebClientBranding:
@@ -1058,6 +1146,9 @@ Outputs:
   UserPoolClientId:
     Description: COGNITO_CLIENT_ID del backend y VITE_COGNITO_CLIENT_ID del frontend.
     Value: !Ref WebClient
+  MfaSetupClientId:
+    Description: COGNITO_MFA_SETUP_CLIENT_ID para `npm run setup:mfa`.
+    Value: !Ref MfaSetupClient
   CognitoIssuer:
     Description: VITE_COGNITO_AUTHORITY del frontend (emisor OIDC).
     Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}

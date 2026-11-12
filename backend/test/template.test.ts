@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { ROUTES } from '../dev/app.ts';
 import * as donationHandlers from '../src/donations/handlers.ts';
+import * as identityHandlers from '../src/identity/handlers.ts';
 import * as projectHandlers from '../src/projects/handlers.ts';
 
 interface Resource {
@@ -140,7 +141,7 @@ describe('infra/template.yaml: funciones Lambda', () => {
     };
     const expected: Record<
       string,
-      { access: Record<string, string[]>; env: Record<string, unknown> }
+      { access: Record<string, string[]>; env?: Record<string, unknown> }
     > = {
       ListProjectsFunction: { access: { ProjectsTable: ['dynamodb:Query'] }, env: PROJECTS },
       GetProjectFunction: { access: { ProjectsTable: ['dynamodb:GetItem'] }, env: PROJECTS },
@@ -167,6 +168,8 @@ describe('infra/template.yaml: funciones Lambda', () => {
         },
         env: { ...PROJECTS, ...AUDIT },
       },
+      // Trigger de Cognito: no toca DynamoDB ni necesita variables propias.
+      PreTokenGenerationFunction: { access: {} },
       GetMyDonationsFunction: {
         access: { DonationsTable: ['dynamodb:Query'] },
         env: { DONATIONS_TABLE: { Ref: 'DonationsTable' } },
@@ -213,7 +216,9 @@ describe('infra/template.yaml: funciones Lambda', () => {
         granted[table] = [...(granted[table] ?? []), ...actions].sort();
       }
       expect(granted, name).toEqual(access);
-      expect(resource(name).Properties.Environment, name).toEqual({ Variables: env });
+      expect(resource(name).Properties.Environment, name).toEqual(
+        env === undefined ? undefined : { Variables: env },
+      );
     }
   });
 
@@ -221,6 +226,7 @@ describe('infra/template.yaml: funciones Lambda', () => {
     const modules: Record<string, Record<string, unknown>> = {
       '../backend/dist/projects': projectHandlers,
       '../backend/dist/donations': donationHandlers,
+      '../backend/dist/identity': identityHandlers,
     };
     for (const [name, fn] of functions) {
       const handlers = modules[String(fn.Properties.CodeUri)];
@@ -236,7 +242,7 @@ describe('infra/template.yaml: HTTP API', () => {
 
   it('declara las mismas rutas y scopes que el servidor local y docs/api.yaml', () => {
     const declared = functions.flatMap(([, fn]) =>
-      Object.values(fn.Properties.Events as Record<string, Resource>).map((event) => {
+      Object.values((fn.Properties.Events ?? {}) as Record<string, Resource>).map((event) => {
         expect(event.Type).toBe('HttpApi');
         expect(event.Properties.ApiId).toEqual({ Ref: 'HttpApi' });
         const auth = event.Properties.Auth as
@@ -377,7 +383,7 @@ describe('infra/template.yaml: funciones públicas de solo lectura (T10)', () =>
   it('ninguna función de una ruta pública puede escribir en DynamoDB', () => {
     const writes = /^dynamodb:(Put|Update|Delete|BatchWrite|TransactWrite)/;
     for (const [name, fn] of functions) {
-      const events = Object.values(fn.Properties.Events as Record<string, Resource>);
+      const events = Object.values((fn.Properties.Events ?? {}) as Record<string, Resource>);
       if (events.some((event) => event.Properties.Auth !== undefined)) continue;
       const actions = statementsOf(roleOf(name)).flatMap((statement) => statement.Action);
       expect(
@@ -408,5 +414,56 @@ describe('infra/template.yaml: simulación solo en el stage academic (CA-06.1)',
   it('ninguna otra función depende del stage', () => {
     const conditional = functions.filter(([, fn]) => fn.Condition !== undefined);
     expect(conditional.map(([name]) => name)).toEqual(['SimulateDonationFunction']);
+  });
+});
+
+describe('infra/template.yaml: MFA obligatorio para GESTOR y AUDITOR (HU-11, D5)', () => {
+  const pool = resource('UserPool').Properties;
+
+  it('el user pool ejecuta el trigger antes de emitir tokens', () => {
+    expect(pool.LambdaConfig).toEqual({
+      PreTokenGenerationConfig: {
+        LambdaArn: { 'Fn::GetAtt': 'PreTokenGenerationFunction.Arn' },
+        LambdaVersion: 'V1_0',
+      },
+    });
+  });
+
+  it('solo este user pool puede invocar el trigger', () => {
+    expect(resource('PreTokenGenerationPermission').Properties).toMatchObject({
+      Principal: 'cognito-idp.amazonaws.com',
+      SourceArn: { 'Fn::GetAtt': 'UserPool.Arn' },
+    });
+  });
+
+  it('el rol del trigger solo puede leer usuarios del pool de esta cuenta y Región', () => {
+    const cognito = statementsOf('PreTokenGenerationRole').filter((statement) =>
+      statement.Action.some((action) => action.startsWith('cognito-idp:')),
+    );
+    expect(cognito).toHaveLength(1);
+    expect(cognito[0]?.Action).toEqual(['cognito-idp:AdminGetUser']);
+    // Comodín justificado en la plantilla: evitar la dependencia circular con el pool.
+    expect(cognito[0]?.Resource).toEqual({
+      'Fn::Sub': 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*',
+    });
+  });
+
+  it('el cliente de alta de MFA no usa OAuth, emite tokens de 5 minutos y no sirve para el API', () => {
+    const client = resource('MfaSetupClient').Properties;
+    expect(client.AllowedOAuthFlowsUserPoolClient).toBe(false);
+    expect(client.GenerateSecret).toBe(false);
+    expect(client.AccessTokenValidity).toBe(5);
+    const authorizer = (
+      resource('HttpApi').Properties.Auth as {
+        Authorizers: { CognitoJwt: { JwtConfiguration: { audience: unknown[] } } };
+      }
+    ).Authorizers.CognitoJwt;
+    expect(authorizer.JwtConfiguration.audience).toEqual([{ Ref: 'WebClient' }]);
+  });
+
+  it('un cambio de correo exige verificar el nuevo antes de aplicarse', () => {
+    expect(pool.UserAttributeUpdateSettings).toEqual({
+      AttributesRequireVerificationBeforeUpdate: ['email'],
+    });
   });
 });
