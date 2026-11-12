@@ -90,17 +90,24 @@ async function login(label: string): Promise<Tokens> {
       } else if (url.pathname === '/') {
         res.writeHead(302, { location: authorizeUrl }).end();
       } else if (url.pathname === '/auth/callback') {
-        const ok = url.searchParams.get('state') === state && url.searchParams.has('code');
-        res.writeHead(ok ? 200 : 400, { 'content-type': 'text/html; charset=utf-8' });
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        // Una pestaña anterior (por ejemplo, la del primer login al recargarse) puede volver a
+        // pedir su callback con otro `state`: se ignora y se sigue esperando el de este login.
+        if (url.searchParams.get('state') !== state) {
+          res.end('<p>Esta pestaña es de un inicio de sesión anterior: puedes cerrarla.</p>');
+          log('    (se ignoró una respuesta de un inicio de sesión anterior)');
+          return;
+        }
+        const error = url.searchParams.get('error');
+        const code = url.searchParams.get('code');
         res.end(
-          ok
+          code
             ? '<p>Listo: ya puedes cerrar esta pestaña y volver a la terminal.</p>'
             : '<p>El inicio de sesión no se completó; revisa la terminal.</p>',
         );
         server.close();
-        if (ok) resolve(url.searchParams.get('code') ?? '');
-        else
-          reject(new Error(`Login fallido: ${url.searchParams.get('error') ?? 'state inválido'}`));
+        if (code) resolve(code);
+        else reject(new Error(`Login fallido: ${error ?? 'sin código'}`));
       } else {
         res.writeHead(404).end();
       }
