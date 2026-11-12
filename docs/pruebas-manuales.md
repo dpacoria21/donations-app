@@ -156,3 +156,30 @@ leen, pero es la regla para cualquier evidencia).
    → 404) y T12 (GESTOR lee historiales → 403), más los casos permitidos.
 3. En CloudTrail, buscar eventos `IsAuthorized` (fuente `verifiedpermissions.amazonaws.com`).
 4. Volver al motor embebido con `AuthorizationEngine=embedded` si se prefiere para la demo.
+
+## T02, T04–T09, T11 y T13 en un solo paso (`npm run evidence:api`)
+
+Requiere dos usuarios del grupo DONANTE (por ejemplo `donante1` y `donante2`) y el puerto 5173
+libre. En PowerShell, desde `backend/`, una línea por vez:
+
+```powershell
+$env:API_URL='<ApiUrl>'
+```
+
+```powershell
+$env:COGNITO_DOMAIN='<CognitoDomain>'
+```
+
+```powershell
+$env:COGNITO_CLIENT_ID='<UserPoolClientId>'
+```
+
+```powershell
+npm run evidence:api | Out-File -Encoding utf8 ../evidence/api/report.md
+```
+
+El script abre el managed login dos veces (primero A, luego B; cerrar la pestaña de A cuando diga
+«Listo»). La contraseña se escribe solo en Cognito y los tokens no se imprimen. Crea una donación de
+S/ 5 y otra de S/ 1 (confirmada en T08) en el primer proyecto publicado, y T13 espera a que caduque
+el access token (hasta 15 minutos). En Windows PowerShell 5.1 el archivo puede quedar con los
+acentos dañados: revisar el reporte antes de hacer commit.
