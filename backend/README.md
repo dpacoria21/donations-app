@@ -9,11 +9,31 @@ solo incluye el esqueleto y los endpoints públicos de proyectos, con datos de p
 - Node.js 24 (`node --version`). Node ejecuta TypeScript directamente (_type stripping_),
   por eso los imports llevan la extensión `.ts`.
 
+## Configuración
+
+```bash
+cp .env.template .env
+```
+
+`.env` no se sube a Git; `.env.template` documenta cada variable. **No guardar llaves de acceso
+de AWS** en `.env`: el proyecto usa credenciales temporales con
+`aws login --profile donations-dev` (CA-NF03.2, CA-NF03.3). Los scripts `dev` y `start` cargan
+`.env` con `node --env-file-if-exists`.
+
+| Variable                    | Uso                                                          |
+| --------------------------- | ------------------------------------------------------------ |
+| `PORT`                      | Puerto del API local (3000)                                  |
+| `CORS_ALLOWED_ORIGINS`      | Orígenes del frontend admitidos, separados por comas         |
+| `AWS_REGION`, `AWS_PROFILE` | Región seleccionada (`us-east-2`) y perfil de AWS CLI        |
+| `STAGE`                     | Stage de API Gateway (`academic`)                            |
+| `*_TABLE`                   | Nombres de las tablas DynamoDB (fase 2)                      |
+| `COGNITO_*`                 | Identificadores públicos del user pool y app client (fase 2) |
+
 ## Comandos
 
 ```bash
 npm install          # instala las versiones exactas de package-lock.json
-npm run dev          # servidor local en http://127.0.0.1:3000/ (se reinicia al guardar)
+npm run dev          # API local en http://127.0.0.1:3000 (se reinicia al guardar)
 npm run check        # lint + formato + typecheck + tests + build
 ```
 
@@ -27,17 +47,24 @@ npm run check        # lint + formato + typecheck + tests + build
 | `npm test`             | Pruebas con Vitest                                             |
 | `npm run build`        | Empaqueta los handlers con esbuild en `dist/`                  |
 
-## Páginas de prueba (solo desarrollo local)
+## API local (solo desarrollo)
 
-`npm run dev` levanta [dev/app.ts](dev/app.ts), que:
+`npm run dev` levanta [dev/app.ts](dev/app.ts), que imita las rutas de API Gateway HTTP API
+(payload 2.0) e invoca **los mismos handlers Lambda** que se desplegarán. Solo responde JSON:
+no sirve páginas. Aplica CORS a los orígenes de `CORS_ALLOWED_ORIGINS`, igual que hará la
+`CorsConfiguration` de HTTP API, para que el frontend (`http://localhost:5173`) pueda llamarlo.
 
-- imita las rutas de API Gateway HTTP API (payload 2.0) e invoca **los mismos handlers Lambda**
-  que se desplegarán;
-- sirve las páginas HTML de [public/](public/): catálogo (`/`) y detalle
-  (`/proyecto.html?id=…`), con enlaces para probar los casos 404.
+## Pruebas con Postman
 
-Estas páginas **no se despliegan**. En AWS, el frontend será la SPA React de `../frontend`
-en S3 + CloudFront.
+En [postman/](postman/) hay una colección con pruebas automáticas (T01, CA-02.1, CA-02.2,
+CA-09.1, CA-09.2) y un entorno local:
+
+1. En Postman: **Import** → `donations-api.postman_collection.json` y
+   `local.postman_environment.json`.
+2. Seleccionar el entorno **Donaciones Seguras — local** y levantar el API con `npm run dev`.
+3. Ejecutar la colección con **Run collection**.
+
+Cuando exista el stage desplegado, se añadirá otro entorno con su `baseUrl`.
 
 ## Endpoints implementados
 
@@ -58,8 +85,8 @@ backend/
 │   ├── projects/   # modelo, repositorio (memoria → DynamoDB) y handlers públicos
 │   ├── authz/      # identidad desde claims del JWT authorizer, RBAC por grupo
 │   └── shared/     # errores, respuestas HTTP y logger JSON
-├── dev/            # servidor local (no se despliega)
-├── public/         # páginas HTML de prueba (no se despliegan)
+├── dev/            # API local para Postman y el frontend (no se despliega)
+├── postman/        # colección y entorno de Postman
 └── test/           # pruebas Vitest
 ```
 

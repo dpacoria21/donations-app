@@ -1,0 +1,169 @@
+{
+  "info": {
+    "name": "Donaciones Seguras — API",
+    "description": "Pruebas del API (design.md §4). Usar con el entorno `local` (npm run dev) o con el del stage desplegado. Cada request cita los criterios HU/CA/T que verifica.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "publishedProjectId", "value": "7a91d0c4-2e5f-4b38-a6c7-1d9e8f2b4a63" },
+    { "key": "draftProjectId", "value": "e8d4b6a2-5c3f-4e19-b7a0-9f1c2d3e4b58" },
+    { "key": "missingProjectId", "value": "00000000-0000-4000-8000-000000000000" }
+  ],
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test('Respuesta JSON', () => pm.expect(pm.response.headers.get('content-type')).to.include('application/json'));",
+          "pm.test('Los errores usan { code, message, requestId }', () => {",
+          "  if (pm.response.code >= 400) pm.expect(pm.response.json()).to.have.all.keys('code', 'message', 'requestId');",
+          "});"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Proyectos (público)",
+      "item": [
+        {
+          "name": "T01 — Listar proyectos publicados",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/v1/projects",
+            "description": "T01 · CA-01.1 · CA-01.2: 200 y sin borradores."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('items es un arreglo', () => pm.expect(body.items).to.be.an('array'));",
+                  "pm.test('Solo proyectos PUBLICADO (CA-01.2)', () => body.items.forEach((p) => pm.expect(p.status).to.eql('PUBLICADO')));",
+                  "pm.test('El borrador no aparece', () => pm.expect(body.items.map((p) => p.projectId)).to.not.include(pm.collectionVariables.get('draftProjectId')));",
+                  "pm.test('Montos en céntimos enteros y PEN', () => body.items.forEach((p) => {",
+                  "  pm.expect(Number.isInteger(p.goalAmountCents)).to.be.true;",
+                  "  pm.expect(Number.isInteger(p.confirmedAmountCents)).to.be.true;",
+                  "  pm.expect(p.currency).to.eql('PEN');",
+                  "}));",
+                  "pm.test('Sin datos de donantes (CA-09.2)', () => pm.expect(pm.response.text()).to.not.include('donorSub'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "HU-02 — Detalle de proyecto publicado",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/v1/projects/{{publishedProjectId}}",
+            "description": "CA-02.1: identificador, descripción, objetivo, estado y monto acumulado."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Campos públicos esperados', () => pm.expect(body).to.have.all.keys('projectId', 'title', 'description', 'goalAmountCents', 'confirmedAmountCents', 'currency', 'status'));",
+                  "pm.test('Es el proyecto pedido', () => pm.expect(body.projectId).to.eql(pm.collectionVariables.get('publishedProjectId')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "CA-02.2 — Detalle de un BORRADOR → 404",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/v1/projects/{{draftProjectId}}",
+            "description": "Un proyecto no publicado devuelve 404 sin revelar contenido."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+                  "pm.test('Código NOT_FOUND', () => pm.expect(pm.response.json().code).to.eql('NOT_FOUND'));",
+                  "pm.test('No revela el contenido del borrador', () => pm.expect(pm.response.text()).to.not.include('Biblioteca'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "CA-02.2 — Detalle de proyecto inexistente → 404",
+          "request": { "method": "GET", "url": "{{baseUrl}}/v1/projects/{{missingProjectId}}" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+                  "pm.test('Código NOT_FOUND', () => pm.expect(pm.response.json().code).to.eql('NOT_FOUND'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "CA-02.2 — Identificador mal formado → 404",
+          "request": { "method": "GET", "url": "{{baseUrl}}/v1/projects/no-es-un-uuid" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('404 Not Found', () => pm.response.to.have.status(404));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "HU-09 — Indicadores de un proyecto publicado",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/v1/projects/{{publishedProjectId}}/stats",
+            "description": "CA-09.1 · CA-09.2: solo cifras agregadas confirmadas."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Solo cifras agregadas', () => pm.expect(body).to.have.all.keys('projectId', 'goalAmountCents', 'confirmedAmountCents', 'currency', 'progressPercent'));",
+                  "pm.test('Avance entre 0 y 100', () => pm.expect(body.progressPercent).to.be.within(0, 100));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "HU-09 — Indicadores de un BORRADOR → 404",
+          "request": { "method": "GET", "url": "{{baseUrl}}/v1/projects/{{draftProjectId}}/stats" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('404 Not Found', () => pm.response.to.have.status(404));"]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

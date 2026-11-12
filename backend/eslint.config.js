@@ -15,11 +15,6 @@ export default defineConfig(
     },
   },
   {
-    // Páginas de prueba servidas solo en desarrollo local.
-    files: ['public/**/*.js'],
-    languageOptions: { globals: globals.browser },
-  },
-  {
     files: ['eslint.config.js'],
     languageOptions: { globals: globals.node },
   },

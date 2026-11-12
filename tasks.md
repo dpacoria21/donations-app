@@ -1,0 +1,335 @@
+# Tareas — Plataforma de Donaciones Seguras (2026)
+
+**Fuentes:** [requirements.md](./requirements.md) · [design.md](./design.md)
+**Última actualización:** 2026-11-11
+
+Lista incremental para seguir el avance del MVP. Las fases siguen el plan del design.md §9.
+Cada tarea cita los identificadores HU/CA/T que cubre, para mantener la trazabilidad que pide
+requirements.md §7.
+
+## Cómo usar este archivo
+
+- `- [x]` hecho · `- [ ]` pendiente. Si una tarea está a medias, se deja sin marcar y se
+  explica qué falta.
+- Una tarea se marca como hecha cuando: (1) entró por un PR revisado por otro integrante,
+  (2) tiene pruebas, y (3) el CI está en verde. Lo que dependa de AWS necesita además
+  evidencia en el stage desplegado.
+- Al marcarla, añadir el enlace al PR, por ejemplo: `(PR #12)`.
+- Las fases son incrementales. Primero el backend de cada fase y luego su parte del frontend.
+- **MVP obligatorio:** HU-01 a HU-09, HU-11 y RNF-HU-01 a RNF-HU-11. **Extensión:** HU-10 y
+  HU-12, solo cuando el MVP esté completo.
+
+## Resumen de avance
+
+| Fase | Tema                                     | Estado    |
+| ---- | ---------------------------------------- | --------- |
+| 0    | Cuenta AWS, repositorio y documentos     | Pendiente |
+| 1    | Esqueletos (backend y frontend) y CI     | En curso  |
+| 2    | Infraestructura base y autenticación     | Pendiente |
+| 3    | Proyectos y catálogo                     | En curso  |
+| 4    | Donaciones e idempotencia                | Pendiente |
+| 5    | Simulación, concurrencia, MFA y frontend | Pendiente |
+| 6    | Endurecimiento y evidencias              | Pendiente |
+| 7    | Extensiones (opcional)                   | Pendiente |
+| 8    | Cierre, entrega y limpieza               | Pendiente |
+
+---
+
+## Fase 0 — Cuenta AWS, repositorio y documentos (día 1)
+
+- [ ] Confirmar la Región seleccionada en AWS Settings → View all projects → Overview →
+      Additional Info → Region. Hoy figura `us-east-2`; todos los recursos regionales van allí
+      (CA-NF09.1).
+- [ ] Comprobar el plan con `aws freetier get-account-plan-state` y que cada servicio del
+      diseño esté en la lista del plan: Lambda, API Gateway, DynamoDB, Cognito, S3,
+      CloudFront, CloudWatch, CloudFormation/SAM, IAM, CloudTrail, Budgets y Verified
+      Permissions (CA-NF09.1).
+- [ ] Crear una alerta en AWS Budgets (CA-NF09.1).
+- [ ] Acceso del equipo: nadie trabaja con root; cada integrante tiene MFA y ninguna llave de
+      acceso de larga duración (CA-NF03.3). Ver la decisión D3.
+- [ ] Repositorio en GitHub con `main` protegida y PR con al menos una revisión de otro
+      integrante (design.md §8).
+- [ ] Activar el secret scanning y Dependabot en GitHub (design.md §6.2).
+- [x] `.gitignore` que excluye `node_modules`, `dist`, `.aws-sam`, `.env*` y `.local/`
+      (CA-NF01.2).
+- [ ] `docs/threat-model.md`: STRIDE resumido y mapeo NIST inicial (design.md §8).
+- [ ] Crear `AI_USAGE.md` con la tabla de design.md §10 e ir completándola en cada PR.
+- [ ] Actualizar `AGENTS.md`: todavía remite a un README raíz que ya no existe.
+
+## Fase 1 — Esqueleto del backend y CI
+
+- [x] `backend/` con Node.js 24, TypeScript 6.0, ESLint estricto, Prettier, Vitest y esbuild.
+      Versiones exactas en `package-lock.json`.
+- [x] `src/shared`: errores con el formato `{ code, message, requestId }` sin detalles internos,
+      y un log JSON por solicitud con `requestId`, acción, resultado, código HTTP y duración
+      (CA-NF07.1).
+- [x] `src/authz`: `getIdentity` obtiene `sub` y `cognito:groups` solo de los claims del JWT
+      authorizer, y `requireGroup` responde 403 (CA-04.3). Probado de forma unitaria; aún no
+      lo usa ninguna ruta.
+- [x] API local (`npm run dev`) que imita HTTP API, solo JSON y con CORS para el frontend. Solo
+      para desarrollo; no se despliega.
+- [x] Configuración con `.env` (ignorado por Git) y `.env.template` documentado en backend y
+      frontend, sin llaves de AWS (CA-NF01.2, CA-NF03.2).
+- [x] Colección de Postman con entorno local en `backend/postman/` (design.md §9). Ampliarla en
+      cada fase y añadir un entorno para el stage desplegado.
+- [x] Esqueleto del frontend: React 19, TypeScript, Vite 8, Tailwind 4, ESLint, Prettier, Vitest
+      y Testing Library, con la comprobación de conexión al API.
+- [ ] `.github/workflows/ci.yml`: `npm ci` y `npm run check` (lint, formato, typecheck, tests y
+      build) para backend y frontend en cada PR (CA-NF08.1).
+- [ ] Añadir `npm audit` al CI y decidir qué hacer con las 10 alertas moderadas de las
+      dependencias de desarrollo de ESLint (design.md §6.2).
+- [ ] `docs/api.yaml` en OpenAPI 3.1 con los endpoints existentes, ampliándolo en cada fase
+      (requirements.md §7).
+
+## Fase 2 — Infraestructura base y autenticación (día 2)
+
+### Infraestructura (AWS SAM, `infra/template.yaml`)
+
+- [ ] HTTP API con el stage `academic`, throttling, logs de acceso y una retención de logs de
+      14 días como máximo (CA-NF07.1, design.md §6.2).
+- [ ] Tablas DynamoDB en modo on-demand (design.md §5):
+  - [ ] `Projects`: PK `projectId`, GSI `status-createdAt`.
+  - [ ] `Donations`: PK `donationId`, GSI `donorSub-createdAt`.
+  - [ ] `Idempotency`: PK `donorSub#createDonation#idempotencyKey`, TTL `expiresAt` de 24 h.
+  - [ ] `AuditEvents`: PK `eventType`, SK `timestamp#eventId`.
+- [ ] Un rol IAM por función Lambda, con solo las acciones y tablas que necesita. Sin
+      `Action: "*"` ni `Resource: "*"` injustificados (CA-NF03.1, CA-NF03.2).
+- [ ] Repositorio DynamoDB de proyectos que reemplace al de memoria sin cambiar los handlers.
+- [ ] Primer `sam deploy` en la Región seleccionada y comprobar los endpoints públicos por HTTPS
+      (CA-NF01.1).
+
+### Identidad (Cognito): HU-03, HU-04 y HU-11
+
+- [ ] User pool nuevo que pida solo el correo; el `sub` es el identificador. El pool de la demo
+      Java exige teléfono, nombre y fecha de nacimiento, y esos atributos no se pueden cambiar
+      (CA-NF10.1).
+- [ ] Grupos `DONANTE`, `GESTOR` y `AUDITOR` (requirements.md §1).
+- [ ] App client público sin secreto, con Authorization Code + PKCE y sin flujo implícito
+      (CA-03.1).
+- [ ] Access token con una vigencia de 15 minutos como máximo y revocación de tokens habilitada
+      (CA-03.3, AD-07).
+- [ ] Resource server con los scopes `api/projects.write`, `api/donations.write`,
+      `api/donations.read` y `api/audit.read` (design.md §4).
+- [ ] MFA TOTP disponible en el pool, sin SMS. El alta por usuario se hace en la fase 5
+      (CA-11.1).
+- [ ] JWT authorizer que valide el emisor (user pool) y que la audiencia sea el `client_id`.
+      Las rutas protegidas declaran `AuthorizationScopes`, para que un ID token no sirva
+      (CA-NF02.1).
+- [ ] Usuarios de prueba ficticios para DONANTE, GESTOR y AUDITOR. El visitante no tiene cuenta.
+
+### Pruebas de la fase
+
+- [ ] T02: ruta protegida sin token → 401 (CA-03.2).
+- [ ] T11: un ID token, un token alterado, uno vencido o uno de otro app client como Bearer → 401
+      (CA-03.2, CA-NF02.1). Ver la decisión D4.
+
+### Frontend
+
+- [x] Esqueleto con Vite, React 19, TypeScript y Tailwind 4, sin Bootstrap (design.md §2).
+- [ ] Añadir React Router, TanStack Query, React Hook Form y Zod.
+- [ ] Login y logout con oidc-client-ts (PKCE) y tokens en memoria, no en `localStorage`
+      (CA-03.1, CA-NF11.1).
+- [ ] Al cerrar sesión, borrar los tokens y revocar el refresh token (CA-03.3).
+
+## Fase 3 — Proyectos y catálogo (día 3)
+
+### Backend
+
+- [x] `GET /v1/projects`: solo PUBLICADO; lista vacía sin errores (CA-01.1, CA-01.2, CA-01.3).
+      Por ahora con datos en memoria.
+- [x] `GET /v1/projects/{projectId}`: un ID inexistente, en borrador o mal formado devuelve 404
+      sin contenido (CA-02.1, CA-02.2).
+- [x] `GET /v1/projects/{projectId}/stats`: solo el acumulado confirmado, sin datos de donantes
+      (CA-09.2). CA-09.1 queda completo cuando la simulación de la fase 5 sea lo único que
+      incrementa `confirmedAmountCents`.
+- [ ] Llevar los tres endpoints a DynamoDB y desplegarlos.
+- [ ] `POST /v1/projects`: GESTOR con el scope `api/projects.write`. Valida título, descripción
+      y `goalAmountCents` entero positivo, crea en BORRADOR y responde 201/400/401/403 (CA-08.1,
+      CA-04.1).
+- [ ] `PATCH /v1/projects/{projectId}/publish`: solo GESTOR. Publicar uno ya publicado → 409;
+      inexistente → 404 (CA-08.2).
+- [ ] Edición de proyectos. Ver la decisión D2.
+- [ ] Módulo `audit`: cada creación o publicación registra un `AuditEvent` con actor
+      seudonimizado, fecha, acción y resultado, sin tokens ni datos financieros (CA-08.3,
+      CA-10.2).
+
+### Pruebas de la fase
+
+- [x] T01 unitaria: el visitante ve 200 y ningún borrador (CA-01.1, CA-01.2).
+- [ ] T01 contra el stage desplegado.
+- [ ] T03: un donante intenta crear un proyecto → 403 (CA-04.1).
+
+### Frontend
+
+- [ ] Catálogo con nombre, finalidad, meta y suma confirmada en formato PEN, y un estado vacío
+      comprensible (HU-01, CA-09.1).
+- [ ] Detalle con identificador, descripción, objetivo, estado y monto acumulado, y una página
+      404 (HU-02).
+- [ ] Pantallas del GESTOR para crear y publicar proyectos (HU-08).
+
+## Fase 4 — Donaciones e idempotencia (día 4)
+
+### Backend
+
+- [ ] Esquema Zod: `projectId` UUID y `amountCents` entero entre 100 y 100000. La cabecera
+      `Idempotency-Key` es obligatoria y debe ser un UUID (CA-05.1, CA-05.2).
+- [ ] `POST /v1/donations`: DONANTE con el scope `api/donations.write`. El `donorSub` sale del
+      token, nunca del body (CA-05.3). Proyecto inexistente → 404; no PUBLICADO → 409; datos
+      inválidos → 400. Ningún error modifica el acumulado (CA-05.2).
+- [ ] Un solo `TransactWriteItems` que cree el `IdempotencyRecord` (condición
+      `attribute_not_exists`) y la donación `PENDIENTE_SIMULACION` (AD-05, CA-05.4).
+- [ ] Repetir la misma clave con el mismo `payloadHash` (SHA-256 del body normalizado) devuelve
+      la respuesta guardada; con un hash distinto, 409. `TransactionCanceledException` → 409
+      sin efectos parciales (CA-05.4, design.md §5).
+- [ ] No pedir ni almacenar tarjeta, CVV, cuenta bancaria, DNI ni otros datos de pago (CA-05.5).
+- [ ] `GET /v1/donations/me`: solo los registros del `sub` autenticado, con fecha, importe,
+      proyecto y estado (CA-07.1). Un GESTOR recibe 403 (CA-04.2).
+- [ ] Endpoint para consultar una donación por ID, con 404 si es ajena. Ver la decisión D1
+      (CA-07.2).
+
+### Pruebas de la fase
+
+- [ ] T04: montos 0, 100001 o no enteros → 400 (CA-05.2).
+- [ ] T05: intención válida → 201, estado pendiente y sin cargo (CA-05.1).
+- [ ] T06: misma clave y mismo payload → el mismo resultado y una sola donación (CA-05.4).
+- [ ] T07: misma clave con un payload distinto → 409 (CA-05.4).
+- [ ] T09: un donante consulta una donación ajena → 403/404 sin filtrar datos (CA-07.2).
+- [ ] T12: un gestor consulta el historial de un donante → 403/404 (CA-04.2).
+
+### Frontend
+
+- [ ] Formulario de donación con importe en PEN, etiquetas y errores accesibles. Generar una
+      `Idempotency-Key` por intención y reutilizarla en los reintentos (HU-05).
+- [ ] Historial propio (HU-07).
+
+## Fase 5 — Simulación, concurrencia, MFA y publicación del frontend (día 5)
+
+### Backend
+
+- [ ] HU-06: `POST /v1/donations/{donationId}/simulate`: DONANTE propietario. Solo existe en el stage
+      `academic` mediante una `Condition` de SAM; en otro stage la ruta no existe (CA-06.1).
+- [ ] Un `TransactWriteItems` actualiza la donación con la condición
+      `status = PENDIENTE_SIMULACION AND donorSub = :sub`. Si se confirma, la misma transacción
+      incrementa `confirmedAmountCents` (CA-06.2, CA-NF04.2).
+- [ ] Una transición inválida o repetida → 409. Un rechazo no suma al acumulado (CA-06.2,
+      CA-06.3).
+- [ ] Documentar por qué se eligió `TransactWriteItems` condicionado (CA-NF04.2).
+
+### Identidad
+
+- [ ] Activar TOTP en las cuentas de prueba de GESTOR y AUDITOR antes de asignarles el grupo, y
+      comprobar que no pueden desactivarlo (CA-11.1). Ver la decisión D5.
+- [ ] Demostrar que revocar el refresh token impide renovar la sesión, mientras que el access
+      token emitido sigue valiendo hasta expirar (CA-03.3, CA-03.4).
+
+### Pruebas de la fase
+
+- [ ] T08: 10 confirmaciones concurrentes de la misma donación → un solo incremento (CA-06.2,
+      CA-NF04.1).
+- [ ] T13: token revocado usado antes de expirar → aceptado; después de expirar → rechazado
+      (CA-03.4).
+- [ ] T14: un GESTOR sin segundo factor no obtiene tokens. Guardar la captura (CA-11.2).
+
+### Frontend y publicación
+
+- [ ] Pantalla de simulación con el texto exacto «Simulación académica: no se ha realizado
+      ningún cobro» (CA-06.4).
+- [ ] Aviso de prototipo académico: un despliegue real exigiría una evaluación legal según la
+      Ley N.º 29733 (CA-NF10.2).
+- [ ] S3 privado y CloudFront con OAC, solo HTTPS (CA-NF01.1).
+- [ ] Response headers policy de CloudFront con CSP restrictiva, HSTS,
+      `X-Content-Type-Options` y `Referrer-Policy` (CA-NF11.2).
+
+## Fase 6 — Endurecimiento y evidencias (día 6)
+
+- [ ] T10: comprobar con IAM Policy Simulator o una prueba controlada que la Lambda de listado
+      no puede escribir en DynamoDB → `AccessDenied` y un error controlado (CA-NF03.1).
+- [ ] Revisar las políticas con IAM Access Analyzer (CA-NF03.2).
+- [ ] Ninguna credencial AWS persistente en el código ni en el CI. Si se despliega desde GitHub
+      Actions, usar OIDC limitado al repositorio y a `main` (CA-NF03.2).
+- [ ] Revisar los logs: sin tokens, secretos ni datos personales (CA-NF01.2).
+- [ ] Capturas de CloudWatch con un caso exitoso y uno rechazado (401/403). Los 401 del
+      authorizer se ven en los logs de acceso de la API (CA-NF07.2).
+- [ ] CloudTrail muestra los cambios de infraestructura (CA-NF07.2).
+- [ ] Rendimiento: con 50 proyectos, el p95 de los GET es de 1.5 s o menos, sin contar el cold
+      start. Registrar el método, la herramienta y las condiciones (CA-NF05.1, CA-NF05.2).
+- [ ] Accesibilidad: catálogo, detalle, donación y confirmación usables a 375 px y con teclado;
+      etiquetas y foco visible; revisión WCAG 2.2 AA (CA-NF06.1, CA-NF06.2).
+- [ ] Demostrar que la UI no es la que autoriza: llamar directamente al API con tokens de otros
+      roles. Lambda valida rol, propietario y reglas de negocio en cada solicitud y no confía en
+      roles, montos ni IDs enviados por el navegador (CA-NF02.2, design.md §9).
+
+## Fase 7 — Extensiones (opcional, solo con el MVP completo)
+
+- [ ] HU-10: `GET /v1/audit` solo para AUDITOR con MFA, con filtros por tipo y fecha
+      (CA-10.1, CA-10.2).
+- [ ] HU-12: expresar en Cedar (`policies/`) las reglas de HU-04, HU-07 y HU-08 y evaluarlas con
+      Amazon Verified Permissions (`IsAuthorized`) desde Lambda (CA-12.1).
+- [ ] HU-12: T03, T09 y T12 pasan igual con el motor externo; comparar la autorización embebida
+      con la externalizada en el informe (CA-12.2).
+
+## Fase 8 — Cierre, entrega y limpieza (día 7)
+
+- [ ] README raíz con la arquitectura, el despliegue, la limpieza (`sam delete`) y las
+      restricciones de la cuenta (CA-NF08.2).
+- [ ] Informe técnico:
+  - [ ] Tabla de mapeo a los 7 principios NIST SP 800-207 y a PE/PA/PEP (CA-NF02.3).
+  - [ ] Limitaciones: revocación, postura del dispositivo, WAF con HTTP API y cuenta compartida
+        (design.md §6.3).
+  - [ ] Justificación de los tokens en memoria (CA-NF11.1).
+- [ ] Trazabilidad: cada HU, CA y RNF-HU aparece en al menos un test y en el informe
+      (requirements.md §7).
+- [ ] Evidencias sanitizadas de T01–T14 en `evidence/`.
+- [ ] `AI_USAGE.md` completo (design.md §10).
+- [ ] URL de la demo HTTPS activa durante la evaluación y demo con usuarios de los cuatro roles.
+- [ ] Limpieza al terminar la evaluación: `sam delete`, vaciar y borrar los buckets, borrar el
+      user pool si sigue existiendo y comprobar en Resource Explorer que no quedan recursos,
+      también en `us-east-1` para CloudWatch Logs y WAF (CA-NF09.2).
+- [ ] Borrar el user pool y el app client de la demo Java (`us-east-2_yAC3TdllN`) cuando el pool
+      nuevo funcione.
+
+---
+
+## Matriz de pruebas T01–T14
+
+| ID  | Escenario                                 | Esperado                           | Fase | Automática      | Evidencia AWS |
+| --- | ----------------------------------------- | ---------------------------------- | ---- | --------------- | ------------- |
+| T01 | Visitante consulta proyectos              | 200, sin borradores                | 3    | ✅ (en memoria) | ⬜            |
+| T02 | Sin token intenta donar                   | 401                                | 2    | ⬜              | ⬜            |
+| T03 | Donante intenta crear proyecto            | 403                                | 3    | ⬜              | ⬜            |
+| T04 | Donante envía 0, 100001 o valor no entero | 400                                | 4    | ⬜              | ⬜            |
+| T05 | Donante crea intención válida             | 201, pendiente, sin cargo          | 4    | ⬜              | ⬜            |
+| T06 | Repite clave y payload idénticos          | Mismo resultado, una sola donación | 4    | ⬜              | ⬜            |
+| T07 | Repite clave con payload distinto         | 409                                | 4    | ⬜              | ⬜            |
+| T08 | 10 confirmaciones concurrentes            | Un solo incremento                 | 5    | ⬜              | ⬜            |
+| T09 | Donante consulta donación ajena           | 403/404 sin filtración             | 4    | ⬜              | ⬜            |
+| T10 | Lambda de listado intenta escribir        | `AccessDenied` y error controlado  | 6    | —               | ⬜            |
+| T11 | ID token o token alterado como Bearer     | 401                                | 2    | —               | ⬜            |
+| T12 | Gestor consulta historial de un donante   | 403/404                            | 4    | ⬜              | ⬜            |
+| T13 | Token revocado usado antes de expirar     | Aceptado hasta expirar; luego 401  | 5    | —               | ⬜            |
+| T14 | GESTOR inicia sesión sin segundo factor   | No obtiene tokens                  | 5    | —               | ⬜            |
+
+«—» indica que la prueba depende de API Gateway, IAM o Cognito y solo se puede demostrar contra
+AWS.
+
+## Decisiones abiertas
+
+Conviene acordarlas con el docente antes de la fase indicada.
+
+- **D1 (fase 4):** T09 pide consultar una donación ajena, pero `GET /v1/donations/me` no
+  recibe un ID. Propuesta: añadir `GET /v1/donations/{donationId}` (DONANTE propietario; 404 si
+  es ajena) y documentarlo en OpenAPI.
+- **D2 (fase 3):** la matriz de roles dice «crear/editar/publicar», pero los endpoints no
+  incluyen la edición. Hay que decidir si se añade `PATCH /v1/projects/{projectId}` (solo en
+  BORRADOR) o si la edición queda fuera.
+- **D3 (fase 0):** CA-NF03.3 pide usuarios IAM con MFA, pero la cuenta usa la nueva experiencia
+  de AWS, donde los integrantes se invitan como _team members_ desde AWS Settings. Hay que
+  acordar cómo se acredita.
+- **D4 (fase 2):** HTTP API no permite personalizar sus errores nativos, y un token sin el scope
+  requerido podría responder 403 en lugar de 401. Hay que comprobar el código real de T11 y
+  documentarlo.
+- **D5 (fase 5):** en Cognito, el MFA obligatorio se configura para todo el pool, no por grupo.
+  Con el MFA opcional, hay que garantizar el TOTP en GESTOR y AUDITOR por procedimiento de alta
+  y demostrarlo en T14.
+- **D6:** confirmar con el docente la fecha de entrega. El plan es de una semana desde el
+  2026-11-02.

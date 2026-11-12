@@ -2,7 +2,8 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDevServer } from '../dev/app.ts';
 
-const server = createDevServer();
+const FRONTEND_ORIGIN = 'http://localhost:5173';
+const server = createDevServer({ allowedOrigins: [FRONTEND_ORIGIN] });
 let baseUrl = '';
 
 beforeAll(async () => {
@@ -16,16 +17,7 @@ afterAll(async () => {
   await new Promise((resolve) => server.close(resolve));
 });
 
-describe('servidor local de desarrollo', () => {
-  it('sirve la página del catálogo con cabeceras de seguridad', async () => {
-    const response = await fetch(`${baseUrl}/`);
-    expect(response.status).toBe(200);
-    expect(response.headers.get('content-type')).toContain('text/html');
-    expect(response.headers.get('content-security-policy')).toContain("default-src 'self'");
-    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
-    expect(await response.text()).toContain('Proyectos sociales');
-  });
-
+describe('servidor local del API', () => {
   it('enruta /v1/projects al handler Lambda', async () => {
     const response = await fetch(`${baseUrl}/v1/projects`);
     expect(response.status).toBe(200);
@@ -41,22 +33,39 @@ describe('servidor local de desarrollo', () => {
     expect(await response.json()).toMatchObject({ progressPercent: 76 });
   });
 
-  it('una ruta de API inexistente devuelve 404 JSON', async () => {
-    const response = await fetch(`${baseUrl}/v1/donations`);
-    expect(response.status).toBe(404);
-    expect(await response.json()).toMatchObject({ code: 'NOT_FOUND' });
-  });
-
-  it.each(['/..%2fpackage.json', '/%2e%2e/package.json', '/..%5cpackage.json', '/%E0%A4%A'])(
-    'no permite salir de public/ (%s)',
+  it.each(['/', '/index.html', '/v1/donations'])(
+    'ya no sirve páginas: %s devuelve 404 JSON',
     async (path) => {
       const response = await fetch(`${baseUrl}${path}`);
       expect(response.status).toBe(404);
+      expect(response.headers.get('content-type')).toContain('application/json');
+      expect(await response.json()).toMatchObject({ code: 'NOT_FOUND' });
     },
   );
+});
 
-  it('rechaza métodos distintos de GET en las páginas', async () => {
-    const response = await fetch(`${baseUrl}/index.html`, { method: 'POST' });
-    expect(response.status).toBe(405);
+describe('CORS para el frontend', () => {
+  it('añade el origen permitido a las respuestas', async () => {
+    const response = await fetch(`${baseUrl}/v1/projects`, {
+      headers: { origin: FRONTEND_ORIGIN },
+    });
+    expect(response.headers.get('access-control-allow-origin')).toBe(FRONTEND_ORIGIN);
+  });
+
+  it('no concede CORS a otros orígenes', async () => {
+    const response = await fetch(`${baseUrl}/v1/projects`, {
+      headers: { origin: 'https://atacante.example' },
+    });
+    expect(response.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('responde al preflight con métodos y cabeceras permitidos', async () => {
+    const response = await fetch(`${baseUrl}/v1/projects`, {
+      method: 'OPTIONS',
+      headers: { origin: FRONTEND_ORIGIN, 'access-control-request-method': 'GET' },
+    });
+    expect(response.status).toBe(204);
+    expect(response.headers.get('access-control-allow-headers')).toContain('authorization');
+    expect(response.headers.get('access-control-allow-headers')).toContain('idempotency-key');
   });
 });

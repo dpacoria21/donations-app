@@ -8,7 +8,7 @@ coverage/
 # Secretos y configuración local (nunca al repositorio)
 .env
 .env.*
-!.env.example
+!.env.template
 .local/
 
 # Logs y archivos del sistema o del editor

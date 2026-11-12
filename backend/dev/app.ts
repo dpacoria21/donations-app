@@ -1,14 +1,10 @@
 /**
- * Servidor SOLO para desarrollo local. Imita las rutas de API Gateway HTTP API
- * (payload 2.0) llamando a los mismos handlers Lambda, y sirve páginas HTML
- * simples desde `public/` para comprobar los endpoints. No se despliega: en AWS
- * el frontend va en S3 + CloudFront y la API en API Gateway + Lambda.
+ * Servidor SOLO para desarrollo local. Imita API Gateway HTTP API (payload 2.0)
+ * invocando los mismos handlers Lambda que se desplegarán, para probar el API
+ * desde Postman o desde el frontend. No sirve páginas y no se despliega.
  */
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { extname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { getProject, getProjectStats, listProjects } from '../src/projects/handlers.ts';
 import type { HttpResult } from '../src/shared/http.ts';
@@ -20,6 +16,11 @@ interface Route {
   routeKey: string;
   pattern: RegExp;
   handler: LambdaHandler;
+}
+
+export interface DevServerOptions {
+  /** Orígenes del frontend admitidos por CORS (equivale a `CorsConfiguration` de HTTP API). */
+  allowedOrigins?: readonly string[];
 }
 
 // Mismas rutas que declarará la plantilla SAM (design.md §4).
@@ -44,68 +45,69 @@ const ROUTES: readonly Route[] = [
   },
 ];
 
-const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
+const CORS_ALLOW_METHODS = 'GET, POST, PATCH, OPTIONS';
+const CORS_ALLOW_HEADERS = 'authorization, content-type, idempotency-key';
 
-const CONTENT_TYPES: Readonly<Record<string, string>> = {
-  '.html': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.svg': 'image/svg+xml',
-};
+export function createDevServer(options: DevServerOptions = {}): Server {
+  const allowedOrigins = new Set(options.allowedOrigins ?? []);
 
-// Equivalente local de la response headers policy de CloudFront (CA-NF11.2).
-const PAGE_HEADERS = {
-  'content-security-policy':
-    "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
-  'x-content-type-options': 'nosniff',
-  'referrer-policy': 'no-referrer',
-  'x-frame-options': 'DENY',
-};
-
-export function createDevServer(): Server {
   return createServer((req, res) => {
-    handle(req, res).catch(() => {
+    handle(req, res, allowedOrigins).catch(() => {
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
       res.end('Error interno');
     });
   });
 }
 
-async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const url = new URL(req.url ?? '/', 'http://localhost');
-  const method = req.method ?? 'GET';
-
-  if (url.pathname === '/v1' || url.pathname.startsWith('/v1/')) {
-    await handleApi(req, res, url, method);
-    return;
-  }
-  if (method !== 'GET' && method !== 'HEAD') {
-    res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8', allow: 'GET, HEAD' });
-    res.end('Método no permitido');
-    return;
-  }
-  await serveStatic(res, url.pathname, method === 'HEAD');
-}
-
-async function handleApi(
+async function handle(
   req: IncomingMessage,
   res: ServerResponse,
-  url: URL,
-  method: string,
+  allowedOrigins: ReadonlySet<string>,
 ): Promise<void> {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const method = req.method ?? 'GET';
+  const origin = req.headers.origin;
+  const cors: Record<string, string> =
+    origin !== undefined && allowedOrigins.has(origin)
+      ? { 'access-control-allow-origin': origin, vary: 'origin' }
+      : {};
+
+  // Preflight del navegador: solo se responde con permisos a orígenes admitidos.
+  if (method === 'OPTIONS') {
+    const allowed = 'access-control-allow-origin' in cors;
+    res.writeHead(
+      204,
+      allowed
+        ? {
+            ...cors,
+            'access-control-allow-methods': CORS_ALLOW_METHODS,
+            'access-control-allow-headers': CORS_ALLOW_HEADERS,
+            'access-control-max-age': '600',
+          }
+        : {},
+    );
+    res.end();
+    return;
+  }
+
   for (const route of ROUTES) {
     const match = route.method === method ? route.pattern.exec(url.pathname) : null;
     if (match) {
       const result = await route.handler(toEvent(req, url, method, route, match));
-      writeResult(res, result);
+      writeResult(res, result, cors);
       return;
     }
   }
-  writeResult(res, {
-    statusCode: 404,
-    headers: { 'content-type': 'application/json; charset=utf-8' },
-    body: JSON.stringify({ code: 'NOT_FOUND', message: 'Ruta no encontrada' }),
-  });
+
+  writeResult(
+    res,
+    {
+      statusCode: 404,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ code: 'NOT_FOUND', message: 'Ruta no encontrada' }),
+    },
+    cors,
+  );
 }
 
 function toEvent(
@@ -152,42 +154,11 @@ function toEvent(
   };
 }
 
-function writeResult(res: ServerResponse, result: HttpResult): void {
+function writeResult(res: ServerResponse, result: HttpResult, cors: Record<string, string>): void {
   const headers = Object.fromEntries(
     Object.entries(result.headers ?? {}).map(([name, value]) => [name, String(value)]),
   );
-  res.writeHead(result.statusCode ?? 200, headers);
+  res.writeHead(result.statusCode ?? 200, { ...headers, ...cors });
   const body = result.body ?? '';
   res.end(result.isBase64Encoded ? Buffer.from(body, 'base64') : body);
-}
-
-async function serveStatic(res: ServerResponse, pathname: string, headOnly: boolean) {
-  const file = await readPublicFile(pathname);
-  if (!file) {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', ...PAGE_HEADERS });
-    res.end('No encontrado');
-    return;
-  }
-  res.writeHead(200, { 'content-type': file.type, 'cache-control': 'no-cache', ...PAGE_HEADERS });
-  res.end(headOnly ? undefined : file.content);
-}
-
-async function readPublicFile(pathname: string): Promise<{ type: string; content: Buffer } | null> {
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(pathname);
-  } catch {
-    return null;
-  }
-  const relative = decoded === '/' ? 'index.html' : decoded.replace(/^\/+/, '');
-  const filePath = resolve(PUBLIC_DIR, relative);
-  // Impide salir de public/ (por ejemplo, con /..%2fpackage.json).
-  if (!filePath.startsWith(PUBLIC_DIR)) return null;
-  const type = CONTENT_TYPES[extname(filePath)];
-  if (!type) return null;
-  try {
-    return { type, content: await readFile(filePath) };
-  } catch {
-    return null;
-  }
 }
