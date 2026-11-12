@@ -130,7 +130,7 @@ describe('infra/template.yaml: funciones Lambda', () => {
     }
   });
 
-  it('cada función solo tiene la acción de DynamoDB que necesita, sin escrituras (T10)', () => {
+  it('cada función solo tiene la acción de DynamoDB que necesita (T10)', () => {
     const expected: Record<string, { actions: string[]; table: string; envVar: string }> = {
       ListProjectsFunction: {
         actions: ['dynamodb:Query'],
@@ -144,6 +144,26 @@ describe('infra/template.yaml: funciones Lambda', () => {
       },
       GetProjectStatsFunction: {
         actions: ['dynamodb:GetItem'],
+        table: 'ProjectsTable',
+        envVar: 'PROJECTS_TABLE',
+      },
+      ListManagedProjectsFunction: {
+        actions: ['dynamodb:Query'],
+        table: 'ProjectsTable',
+        envVar: 'PROJECTS_TABLE',
+      },
+      CreateProjectFunction: {
+        actions: ['dynamodb:PutItem'],
+        table: 'ProjectsTable',
+        envVar: 'PROJECTS_TABLE',
+      },
+      UpdateProjectFunction: {
+        actions: ['dynamodb:UpdateItem'],
+        table: 'ProjectsTable',
+        envVar: 'PROJECTS_TABLE',
+      },
+      PublishProjectFunction: {
+        actions: ['dynamodb:UpdateItem'],
         table: 'ProjectsTable',
         envVar: 'PROJECTS_TABLE',
       },
@@ -325,5 +345,20 @@ describe('infra/template.yaml: Cognito (HU-03, HU-04, HU-11)', () => {
   it('managed login v2 tiene estilo asignado al app client', () => {
     expect(resource('UserPoolDomain').Properties.ManagedLoginVersion).toBe(2);
     expect(resource('WebClientBranding').Properties.ClientId).toEqual({ Ref: 'WebClient' });
+  });
+});
+
+describe('infra/template.yaml: funciones públicas de solo lectura (T10)', () => {
+  it('ninguna función de una ruta pública puede escribir en DynamoDB', () => {
+    const writes = /^dynamodb:(Put|Update|Delete|BatchWrite|TransactWrite)/;
+    for (const [name, fn] of functions) {
+      const events = Object.values(fn.Properties.Events as Record<string, Resource>);
+      if (events.some((event) => event.Properties.Auth !== undefined)) continue;
+      const actions = statementsOf(roleOf(name)).flatMap((statement) => statement.Action);
+      expect(
+        actions.filter((action) => writes.test(action)),
+        name,
+      ).toEqual([]);
+    }
   });
 });

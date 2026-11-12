@@ -34,6 +34,8 @@ servers:
 tags:
   - name: Proyectos
     description: Catálogo público de proyectos sociales (EP-01, EP-04).
+  - name: Gestión
+    description: Creación, edición y publicación de proyectos por el GESTOR (HU-08).
   - name: Donaciones
     description: Donaciones simuladas del donante autenticado (EP-03).
 paths:
@@ -65,6 +67,48 @@ paths:
                     confirmedAmountCents: 612550
                     currency: PEN
                     status: PUBLICADO
+                    updatedAt: "2026-11-09T18:45:00.000Z"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      tags: [Gestión]
+      operationId: createProject
+      summary: Crear un proyecto en BORRADOR
+      description: |
+        Solo GESTOR. El proyecto nace en BORRADOR con 0 recaudado y no aparece en el catálogo
+        hasta publicarlo (HU-08: CA-08.1; HU-04: CA-04.1; T03).
+      security:
+        - cognito: [api/projects.write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectRequest"
+            example:
+              title: Talleres de lectura en Socabaya
+              description: Materiales y facilitadores para talleres de lectura infantil.
+              goalAmountCents: 450000
+      responses:
+        "201":
+          description: Proyecto creado.
+          headers:
+            Location:
+              description: Ruta del proyecto creado.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicProject"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -72,6 +116,44 @@ paths:
   /v1/projects/{projectId}:
     parameters:
       - $ref: "#/components/parameters/ProjectId"
+    patch:
+      tags: [Gestión]
+      operationId: updateProject
+      summary: Editar título, descripción o meta
+      description: |
+        Solo GESTOR, en cualquier estado (decisión D2 de tasks.md). La meta nunca puede quedar
+        por debajo del monto ya recaudado: la condición se evalúa en la misma escritura.
+      security:
+        - cognito: [api/projects.write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProjectRequest"
+            example:
+              goalAmountCents: 900000
+      responses:
+        "200":
+          description: Proyecto actualizado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicProject"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ProjectNotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
     get:
       tags: [Proyectos]
       operationId: getProject
@@ -126,6 +208,63 @@ paths:
                 progressPercent: 76
         "404":
           $ref: "#/components/responses/ProjectNotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /v1/projects/{projectId}/publish:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    patch:
+      tags: [Gestión]
+      operationId: publishProject
+      summary: Publicar un proyecto en BORRADOR
+      description: |
+        Solo GESTOR. BORRADOR → PUBLICADO; publicar uno ya publicado devuelve 409 (HU-08:
+        CA-08.2). No existe la transición inversa.
+      security:
+        - cognito: [api/projects.write]
+      responses:
+        "200":
+          description: Proyecto publicado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicProject"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ProjectNotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /v1/manage/projects:
+    get:
+      tags: [Gestión]
+      operationId: listManagedProjects
+      summary: Listar todos los proyectos, también los BORRADOR
+      description: Solo GESTOR. Permite editar y publicar desde la interfaz (HU-08).
+      security:
+        - cognito: [api/projects.write]
+      responses:
+        "200":
+          description: Todos los proyectos, del más reciente al más antiguo.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -204,6 +343,30 @@ components:
         type: string
         const: no-store
   responses:
+    BadRequest:
+      description: |
+        Cuerpo ausente, que no es JSON o con campos inválidos o no permitidos. El mensaje nombra
+        los campos, pero no repite los valores recibidos.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: BAD_REQUEST
+            message: "Datos inválidos: goalAmountCents"
+            requestId: 2eee4fce-bdb1-498b-b467-6c24572eed51
+    Conflict:
+      description: |
+        La operación no es compatible con el estado actual: publicar un proyecto ya publicado o
+        fijar una meta menor que el monto recaudado.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: CONFLICT
+            message: El proyecto ya está publicado
+            requestId: 2eee4fce-bdb1-498b-b467-6c24572eed51
     Unauthorized:
       description: |
         Sin token, con un token alterado, caducado o de otro app client. Lo emite el JWT
@@ -285,6 +448,7 @@ components:
           confirmedAmountCents,
           currency,
           status,
+          updatedAt,
         ]
       properties:
         projectId:
@@ -303,6 +467,51 @@ components:
           $ref: "#/components/schemas/Currency"
         status:
           $ref: "#/components/schemas/ProjectStatus"
+        updatedAt:
+          type: string
+          format: date-time
+          description: Última modificación (creación, edición o publicación; decisión D2).
+    CreateProjectRequest:
+      type: object
+      additionalProperties: false
+      description: |
+        No admite otros campos: el estado, el monto recaudado, la moneda y el identificador los
+        fija el servidor (CA-NF02.2).
+      required: [title, description, goalAmountCents]
+      properties:
+        title:
+          type: string
+          minLength: 3
+          maxLength: 120
+        description:
+          type: string
+          minLength: 10
+          maxLength: 2000
+        goalAmountCents:
+          type: integer
+          minimum: 1
+          maximum: 100000000
+          description: Meta en céntimos enteros de PEN (máximo S/ 1 000 000).
+    UpdateProjectRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: |
+        Campos editables según la decisión D2. `goalAmountCents` nunca puede quedar por debajo
+        de `confirmedAmountCents` (409).
+      properties:
+        title:
+          type: string
+          minLength: 3
+          maxLength: 120
+        description:
+          type: string
+          minLength: 10
+          maxLength: 2000
+        goalAmountCents:
+          type: integer
+          minimum: 1
+          maximum: 100000000
     ProjectList:
       type: object
       additionalProperties: false

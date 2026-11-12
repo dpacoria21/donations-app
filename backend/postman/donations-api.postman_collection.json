@@ -16,6 +16,10 @@
     {
       "key": "missingProjectId",
       "value": "00000000-0000-4000-8000-000000000000"
+    },
+    {
+      "key": "newProjectId",
+      "value": ""
     }
   ],
   "event": [
@@ -177,6 +181,331 @@
               "script": {
                 "type": "text/javascript",
                 "exec": ["pm.test('404 Not Found', () => pm.response.to.have.status(404));"]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Proyectos (gestión)",
+      "description": "Requiere un access token de un usuario GESTOR: pestaña Authorization de la carpeta → Get New Access Token. Ejecutar en orden: crear guarda newProjectId para editar y publicar. Para T03, obtener el token con un usuario DONANTE en esa request.",
+      "auth": {
+        "type": "oauth2",
+        "oauth2": [
+          {
+            "key": "grant_type",
+            "value": "authorization_code_with_pkce",
+            "type": "string"
+          },
+          {
+            "key": "authUrl",
+            "value": "{{cognitoDomain}}/oauth2/authorize",
+            "type": "string"
+          },
+          {
+            "key": "accessTokenUrl",
+            "value": "{{cognitoDomain}}/oauth2/token",
+            "type": "string"
+          },
+          {
+            "key": "clientId",
+            "value": "{{cognitoClientId}}",
+            "type": "string"
+          },
+          {
+            "key": "scope",
+            "value": "openid email api/projects.write",
+            "type": "string"
+          },
+          {
+            "key": "redirect_uri",
+            "value": "https://oauth.pstmn.io/v1/callback",
+            "type": "string"
+          },
+          {
+            "key": "useBrowser",
+            "value": true,
+            "type": "boolean"
+          },
+          {
+            "key": "challengeAlgorithm",
+            "value": "S256",
+            "type": "string"
+          },
+          {
+            "key": "client_authentication",
+            "value": "body",
+            "type": "string"
+          },
+          {
+            "key": "tokenName",
+            "value": "cognito-gestor",
+            "type": "string"
+          },
+          {
+            "key": "addTokenTo",
+            "value": "header",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "HU-08 — Crear proyecto (BORRADOR)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/projects",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Talleres de lectura en Socabaya\",\n  \"description\": \"Materiales y facilitadores para talleres de lectura infantil.\",\n  \"goalAmountCents\": 450000\n}"
+            },
+            "description": "CA-08.1: un GESTOR crea un proyecto en BORRADOR con 0 recaudado."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Nace en BORRADOR con 0 recaudado', () => { pm.expect(body.status).to.eql('BORRADOR'); pm.expect(body.confirmedAmountCents).to.eql(0); });",
+                  "pm.collectionVariables.set('newProjectId', body.projectId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "HU-08 — Datos inválidos → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/projects",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Proyecto\",\n  \"description\": \"Descripción válida\",\n  \"goalAmountCents\": 1500.5,\n  \"status\": \"PUBLICADO\"\n}"
+            },
+            "description": "CA-08.1 · CA-NF02.2: meta no entera y un campo no permitido (status) → 400."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('400 Bad Request', () => pm.response.to.have.status(400));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D2 — Editar el proyecto creado",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/projects/{{newProjectId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"goalAmountCents\": 500000\n}"
+            },
+            "description": "Decisión D2: el GESTOR edita título, descripción o meta."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Meta actualizada', () => pm.expect(pm.response.json().goalAmountCents).to.eql(500000));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D2 — Meta menor que lo recaudado → 409",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/projects/{{publishedProjectId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"goalAmountCents\": 100\n}"
+            },
+            "description": "Decisión D2: el proyecto semilla ya tiene 612 550 céntimos recaudados."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('409 Conflict', () => pm.response.to.have.status(409));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "HU-08 — Publicar el proyecto creado",
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/v1/projects/{{newProjectId}}/publish",
+            "description": "CA-08.2: BORRADOR → PUBLICADO."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Ahora es PUBLICADO', () => pm.expect(pm.response.json().status).to.eql('PUBLICADO'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "HU-08 — Publicar de nuevo → 409",
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/v1/projects/{{newProjectId}}/publish",
+            "description": "CA-08.2: publicar uno ya publicado devuelve 409."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('409 Conflict', () => pm.response.to.have.status(409));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "HU-08 — Listar todos (incluye borradores)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/v1/manage/projects"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Incluye BORRADOR', () => pm.expect(pm.response.json().items.map((p) => p.status)).to.include('BORRADOR'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "T03 — Donante intenta crear → 403",
+          "request": {
+            "auth": {
+              "type": "oauth2",
+              "oauth2": [
+                {
+                  "key": "grant_type",
+                  "value": "authorization_code_with_pkce",
+                  "type": "string"
+                },
+                {
+                  "key": "authUrl",
+                  "value": "{{cognitoDomain}}/oauth2/authorize",
+                  "type": "string"
+                },
+                {
+                  "key": "accessTokenUrl",
+                  "value": "{{cognitoDomain}}/oauth2/token",
+                  "type": "string"
+                },
+                {
+                  "key": "clientId",
+                  "value": "{{cognitoClientId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "scope",
+                  "value": "openid email api/donations.read api/donations.write",
+                  "type": "string"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "https://oauth.pstmn.io/v1/callback",
+                  "type": "string"
+                },
+                {
+                  "key": "useBrowser",
+                  "value": true,
+                  "type": "boolean"
+                },
+                {
+                  "key": "challengeAlgorithm",
+                  "value": "S256",
+                  "type": "string"
+                },
+                {
+                  "key": "client_authentication",
+                  "value": "body",
+                  "type": "string"
+                },
+                {
+                  "key": "tokenName",
+                  "value": "cognito-donante",
+                  "type": "string"
+                },
+                {
+                  "key": "addTokenTo",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/projects",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Intento de donante\",\n  \"description\": \"No debería poder crearse.\",\n  \"goalAmountCents\": 1000\n}"
+            },
+            "description": "T03 · CA-04.1: con el token de un usuario DONANTE. Sin el scope api/projects.write, API Gateway responde 403 (nativo); con el scope, la Lambda responde 403 por el grupo."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('403 Forbidden (T03)', () => pm.response.to.have.status(403));"]
               }
             }
           ]

@@ -480,6 +480,246 @@ Resources:
             Path: /v1/projects/{projectId}/stats
 
   # ---------------------------------------------------------------------------------------
+  # Gestión de proyectos (HU-08, decisión D2). Solo GESTOR con api/projects.write; cada
+  # función tiene una sola acción de DynamoDB.
+  # ---------------------------------------------------------------------------------------
+  ListManagedProjectsLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-list-managed-projects
+      RetentionInDays: !Ref LogRetentionDays
+
+  ListManagedProjectsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: GET /v1/manage/projects. Solo Query sobre el GSI status-createdAt de Projects.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt ListManagedProjectsLogGroup.Arn
+        - PolicyName: query-all-projects
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:Query]
+                Resource: !Sub ${ProjectsTable.Arn}/index/status-createdAt
+
+  ListManagedProjectsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-list-managed-projects
+      Description: GET /v1/manage/projects (HU-08)
+      CodeUri: ../backend/dist/projects
+      Handler: handlers.listManagedProjects
+      Role: !GetAtt ListManagedProjectsRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref ListManagedProjectsLogGroup
+      Environment:
+        Variables:
+          PROJECTS_TABLE: !Ref ProjectsTable
+      Events:
+        ListManagedProjects:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: GET
+            Path: /v1/manage/projects
+            Auth:
+              Authorizer: CognitoJwt
+              AuthorizationScopes: [api/projects.write]
+
+  CreateProjectLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-create-project
+      RetentionInDays: !Ref LogRetentionDays
+
+  CreateProjectRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: POST /v1/projects. Solo PutItem sobre Projects.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt CreateProjectLogGroup.Arn
+        - PolicyName: put-project
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:PutItem]
+                Resource: !GetAtt ProjectsTable.Arn
+
+  CreateProjectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-create-project
+      Description: POST /v1/projects (HU-08)
+      CodeUri: ../backend/dist/projects
+      Handler: handlers.createProject
+      Role: !GetAtt CreateProjectRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref CreateProjectLogGroup
+      Environment:
+        Variables:
+          PROJECTS_TABLE: !Ref ProjectsTable
+      Events:
+        CreateProject:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: POST
+            Path: /v1/projects
+            Auth:
+              Authorizer: CognitoJwt
+              AuthorizationScopes: [api/projects.write]
+
+  UpdateProjectLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-update-project
+      RetentionInDays: !Ref LogRetentionDays
+
+  UpdateProjectRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: PATCH /v1/projects/{projectId}. Solo UpdateItem sobre Projects.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt UpdateProjectLogGroup.Arn
+        - PolicyName: update-project
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:UpdateItem]
+                Resource: !GetAtt ProjectsTable.Arn
+
+  UpdateProjectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-update-project
+      Description: PATCH /v1/projects/{projectId} (HU-08, decisión D2)
+      CodeUri: ../backend/dist/projects
+      Handler: handlers.updateProject
+      Role: !GetAtt UpdateProjectRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref UpdateProjectLogGroup
+      Environment:
+        Variables:
+          PROJECTS_TABLE: !Ref ProjectsTable
+      Events:
+        UpdateProject:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: PATCH
+            Path: /v1/projects/{projectId}
+            Auth:
+              Authorizer: CognitoJwt
+              AuthorizationScopes: [api/projects.write]
+
+  PublishProjectLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-publish-project
+      RetentionInDays: !Ref LogRetentionDays
+
+  PublishProjectRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: PATCH /v1/projects/{projectId}/publish. Solo UpdateItem sobre Projects.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt PublishProjectLogGroup.Arn
+        - PolicyName: publish-project
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:UpdateItem]
+                Resource: !GetAtt ProjectsTable.Arn
+
+  PublishProjectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-publish-project
+      Description: PATCH /v1/projects/{projectId}/publish (HU-08)
+      CodeUri: ../backend/dist/projects
+      Handler: handlers.publishProject
+      Role: !GetAtt PublishProjectRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref PublishProjectLogGroup
+      Environment:
+        Variables:
+          PROJECTS_TABLE: !Ref ProjectsTable
+      Events:
+        PublishProject:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: PATCH
+            Path: /v1/projects/{projectId}/publish
+            Auth:
+              Authorizer: CognitoJwt
+              AuthorizationScopes: [api/projects.write]
+
+  # ---------------------------------------------------------------------------------------
   # Funciones de donaciones (rutas protegidas).
   # ---------------------------------------------------------------------------------------
   GetMyDonationsLogGroup:

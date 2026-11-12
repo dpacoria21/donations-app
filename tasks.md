@@ -225,13 +225,25 @@ Parte 2 de la fase: definido en `infra/template.yaml` y probado en
 - [x] `GET /v1/projects/{projectId}/stats`: solo el acumulado confirmado, sin datos de donantes
       (CA-09.2). CA-09.1 queda completo cuando la simulación de la fase 5 sea lo único que
       incrementa `confirmedAmountCents`.
-- [ ] Llevar los tres endpoints a DynamoDB y desplegarlos.
-- [ ] `POST /v1/projects`: GESTOR con el scope `api/projects.write`. Valida título, descripción
-      y `goalAmountCents` entero positivo, crea en BORRADOR y responde 201/400/401/403 (CA-08.1,
-      CA-04.1).
-- [ ] `PATCH /v1/projects/{projectId}/publish`: solo GESTOR. Publicar uno ya publicado → 409;
-      inexistente → 404 (CA-08.2).
-- [ ] Edición de proyectos. Ver la decisión D2.
+- [x] Llevar los tres endpoints a DynamoDB y desplegarlos (fase 2).
+      Parte 1 de la fase: código, plantilla, OpenAPI y Postman listos; falta desplegarlo.
+
+- [x] `POST /v1/projects`: GESTOR con el scope `api/projects.write`. Valida con Zod título,
+      descripción y `goalAmountCents` entero positivo (máximo S/ 1 000 000), rechaza campos extra
+      como `status` o `confirmedAmountCents`, crea en BORRADOR y responde 201/400/401/403
+      (CA-08.1, CA-04.1).
+- [x] `PATCH /v1/projects/{projectId}/publish`: solo GESTOR, con escritura condicionada
+      `status = BORRADOR`. Publicar uno ya publicado → 409; inexistente → 404 (CA-08.2).
+- [x] `PATCH /v1/projects/{projectId}`: edición según la decisión D2 (título, descripción y
+      meta; la meta nunca por debajo de `confirmedAmountCents`, con escritura condicionada).
+- [x] `GET /v1/manage/projects`: el GESTOR ve todos los proyectos, también los BORRADOR, con dos
+      `Query` al GSI (sin `Scan`).
+- [x] Cuatro funciones nuevas en SAM, cada una con su rol y una sola acción de DynamoDB
+      (`Query`, `PutItem` o `UpdateItem`). Una prueba verifica que ninguna función de una ruta
+      pública puede escribir (T10).
+- [x] La vista pública incluye `updatedAt` para mostrar «Última actualización» (D2).
+- [ ] Desplegar (`npm run build` y `sam deploy`) y ejecutar la carpeta «Proyectos (gestión)» de
+      Postman con usuarios GESTOR y DONANTE.
 - [ ] Módulo `audit`: cada creación o publicación registra un `AuditEvent` con actor
       seudonimizado, fecha, acción y resultado, sin tokens ni datos financieros (CA-08.3,
       CA-10.2).
@@ -239,8 +251,10 @@ Parte 2 de la fase: definido en `infra/template.yaml` y probado en
 ### Pruebas de la fase
 
 - [x] T01 unitaria: el visitante ve 200 y ningún borrador (CA-01.1, CA-01.2).
-- [ ] T01 contra el stage desplegado.
-- [ ] T03: un donante intenta crear un proyecto → 403 (CA-04.1).
+- [x] T01 contra el stage desplegado: solo devuelve los proyectos PUBLICADO (fase 2).
+- [x] T03 automatizada: un DONANTE (incluso con el scope) intenta crear, editar o publicar → 403,
+      en el handler y a través del servidor local (CA-04.1).
+- [ ] T03 contra el stage desplegado con Postman.
 
 ### Frontend
 
@@ -402,9 +416,19 @@ Conviene acordarlas con el docente antes de la fase indicada.
 - **D1 (fase 4):** T09 pide consultar una donación ajena, pero `GET /v1/donations/me` no
   recibe un ID. Propuesta: añadir `GET /v1/donations/{donationId}` (DONANTE propietario; 404 si
   es ajena) y documentarlo en OpenAPI.
-- **D2 (fase 3):** la matriz de roles dice «crear/editar/publicar», pero los endpoints no
-  incluyen la edición. Hay que decidir si se añade `PATCH /v1/projects/{projectId}` (solo en
-  BORRADOR) o si la edición queda fuera.
+- **D2 (fase 3) — Decidida el 2026-11-12:** la matriz de roles dice «crear/editar/publicar»,
+  pero design.md §4 no lista un endpoint de edición. Se añade `PATCH /v1/projects/{projectId}`
+  (GESTOR, `api/projects.write`):
+  - Se puede editar en cualquier estado: título, descripción y `goalAmountCents`. Así se
+    corrige una campaña publicada con datos erróneos sin ocultarla a quienes ya donaron.
+  - La meta nunca queda por debajo de `confirmedAmountCents` (409); la condición se evalúa en
+    la misma escritura de DynamoDB, a salvo de una confirmación simultánea.
+  - `confirmedAmountCents`, `status`, `currency` y `projectId` no se editan por esta ruta.
+  - No se puede despublicar: el modelo solo tiene BORRADOR → PUBLICADO, y ocultar una campaña
+    con donaciones pendientes las dejaría sin poder confirmarse.
+  - Cada edición genera un `AuditEvent` con los campos cambiados (parte 2 de la fase 3).
+  - Una campaña que no debería existir necesitaría un estado «Cerrada»: posible extensión,
+    fuera del MVP.
 - **D3 (fase 0):** CA-NF03.3 pide usuarios IAM con MFA, pero la cuenta usa la nueva experiencia
   de AWS, donde los integrantes se invitan como _team members_ desde AWS Settings. Hay que
   acordar cómo se acredita.

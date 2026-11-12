@@ -12,7 +12,15 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { APIGatewayProxyEventV2, APIGatewayProxyEventV2WithJWTAuthorizer } from 'aws-lambda';
 import { SCOPES } from '../src/authz/identity.ts';
 import { getMyDonations } from '../src/donations/handlers.ts';
-import { getProject, getProjectStats, listProjects } from '../src/projects/handlers.ts';
+import {
+  createProject,
+  getProject,
+  getProjectStats,
+  listManagedProjects,
+  listProjects,
+  publishProject,
+  updateProject,
+} from '../src/projects/handlers.ts';
 import type { HttpResult } from '../src/shared/http.ts';
 
 interface RouteBase {
@@ -65,6 +73,34 @@ export const ROUTES: readonly Route[] = [
     handler: getProjectStats,
   },
   {
+    method: 'POST',
+    routeKey: 'POST /v1/projects',
+    pattern: /^\/v1\/projects$/,
+    auth: { scopes: [SCOPES.projectsWrite] },
+    handler: createProject,
+  },
+  {
+    method: 'PATCH',
+    routeKey: 'PATCH /v1/projects/{projectId}',
+    pattern: /^\/v1\/projects\/(?<projectId>[^/]+)$/,
+    auth: { scopes: [SCOPES.projectsWrite] },
+    handler: updateProject,
+  },
+  {
+    method: 'PATCH',
+    routeKey: 'PATCH /v1/projects/{projectId}/publish',
+    pattern: /^\/v1\/projects\/(?<projectId>[^/]+)\/publish$/,
+    auth: { scopes: [SCOPES.projectsWrite] },
+    handler: publishProject,
+  },
+  {
+    method: 'GET',
+    routeKey: 'GET /v1/manage/projects',
+    pattern: /^\/v1\/manage\/projects$/,
+    auth: { scopes: [SCOPES.projectsWrite] },
+    handler: listManagedProjects,
+  },
+  {
     method: 'GET',
     routeKey: 'GET /v1/donations/me',
     pattern: /^\/v1\/donations\/me$/,
@@ -83,6 +119,26 @@ const UNAUTHORIZED: HttpResult = {
   headers: { ...NATIVE_JSON, 'www-authenticate': 'Bearer' },
   body: JSON.stringify({ message: 'Unauthorized' }),
 };
+const PAYLOAD_TOO_LARGE: HttpResult = {
+  statusCode: 413,
+  headers: NATIVE_JSON,
+  body: JSON.stringify({ message: 'Request Entity Too Large' }),
+};
+/** Límite del servidor local; HTTP API acepta hasta 10 MB, pero el API no necesita tanto. */
+const MAX_BODY_BYTES = 64 * 1024;
+
+/** Lee el cuerpo completo; `null` si supera el límite. */
+async function readBody(req: IncomingMessage): Promise<string | null> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req as AsyncIterable<Buffer>) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) return null;
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 const FORBIDDEN: HttpResult = {
   statusCode: 403,
   headers: NATIVE_JSON,
@@ -136,7 +192,12 @@ async function handle(
     const match = route.method === method ? route.pattern.exec(url.pathname) : null;
     if (!match) continue;
 
-    const event = toEvent(req, url, method, route, match);
+    const body = await readBody(req);
+    if (body === null) {
+      writeResult(res, PAYLOAD_TOO_LARGE, cors);
+      return;
+    }
+    const event = toEvent(req, url, method, route, match, body);
     if (!route.auth) {
       writeResult(res, await route.handler(event), cors);
       return;
@@ -222,6 +283,7 @@ function toEvent(
   method: string,
   route: Route,
   match: RegExpExecArray,
+  body: string,
 ): APIGatewayProxyEventV2 {
   const now = Date.now();
   const headers: Record<string, string> = {};
@@ -238,6 +300,7 @@ function toEvent(
     headers,
     queryStringParameters: Object.keys(query).length > 0 ? query : undefined,
     pathParameters: match.groups ? { ...match.groups } : undefined,
+    body: body === '' ? undefined : body,
     isBase64Encoded: false,
     requestContext: {
       accountId: 'local',

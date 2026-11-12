@@ -138,14 +138,26 @@ abre el managed login de Cognito con Authorization Code + PKCE y vuelve a
 `https://oauth.pstmn.io/v1/callback`, que está registrada en el app client. Para la prueba del
 ID token, copiar el `id_token` que muestra Postman en la variable `idToken` del entorno.
 
+La carpeta **Proyectos (gestión)** necesita un token de un usuario **GESTOR** (se obtiene en la
+pestaña Authorization de la carpeta). Se ejecuta en orden: crear (guarda `newProjectId`),
+datos inválidos → 400, editar, meta menor que lo recaudado → 409, publicar, publicar de nuevo
+→ 409 y listar todos. **T03** usa el token de un usuario DONANTE y espera 403.
+
 ## Endpoints implementados
 
-| Método | Ruta                             | Acceso                         | Respuestas      |
-| ------ | -------------------------------- | ------------------------------ | --------------- |
-| GET    | `/v1/projects`                   | Público                        | 200             |
-| GET    | `/v1/projects/{projectId}`       | Público (solo PUBLICADO)       | 200 / 404       |
-| GET    | `/v1/projects/{projectId}/stats` | Público (solo PUBLICADO)       | 200 / 404       |
-| GET    | `/v1/donations/me`               | `api/donations.read` + DONANTE | 200 / 401 / 403 |
+| Método | Ruta                               | Acceso                         | Respuestas                        |
+| ------ | ---------------------------------- | ------------------------------ | --------------------------------- |
+| GET    | `/v1/projects`                     | Público                        | 200                               |
+| GET    | `/v1/projects/{projectId}`         | Público (solo PUBLICADO)       | 200 / 404                         |
+| GET    | `/v1/projects/{projectId}/stats`   | Público (solo PUBLICADO)       | 200 / 404                         |
+| GET    | `/v1/donations/me`                 | `api/donations.read` + DONANTE | 200 / 401 / 403                   |
+| GET    | `/v1/manage/projects`              | `api/projects.write` + GESTOR  | 200 / 401 / 403                   |
+| POST   | `/v1/projects`                     | `api/projects.write` + GESTOR  | 201 / 400 / 401 / 403             |
+| PATCH  | `/v1/projects/{projectId}`         | `api/projects.write` + GESTOR  | 200 / 400 / 401 / 403 / 404 / 409 |
+| PATCH  | `/v1/projects/{projectId}/publish` | `api/projects.write` + GESTOR  | 200 / 401 / 403 / 404 / 409       |
+
+La edición sigue la decisión D2 de [tasks.md](../tasks.md): título, descripción y meta en
+cualquier estado; la meta nunca por debajo de lo recaudado; no se puede despublicar.
 
 Los errores de los handlers usan el formato `{ code, message, requestId }`, y cada solicitud
 escribe una línea de log JSON con `requestId`, acción, resultado, código HTTP y duración. Los

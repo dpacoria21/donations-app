@@ -1,21 +1,52 @@
-import type { APIGatewayProxyEventV2 } from 'aws-lambda';
-import { z } from 'zod';
-import { notFound } from '../shared/errors.ts';
+import { randomUUID } from 'node:crypto';
+import type { APIGatewayProxyEventV2, APIGatewayProxyEventV2WithJWTAuthorizer } from 'aws-lambda';
+import { getIdentity, requireGroup, requireScope, SCOPES } from '../authz/identity.ts';
+import { parseJsonBody } from '../shared/body.ts';
+import { conflict, notFound } from '../shared/errors.ts';
 import { json, withHttp } from '../shared/http.ts';
 import { toProjectStats, toPublicProject, type Project } from './model.ts';
 import { getProjectRepository, type ProjectRepository } from './repository.ts';
+import { createProjectSchema, projectIdSchema, updateProjectSchema } from './schemas.ts';
 
-const projectIdSchema = z.uuid();
+export interface ProjectHandlerOptions {
+  /** Reloj e identificadores inyectables para las pruebas. */
+  now?: () => string;
+  newId?: () => string;
+}
 
-/** Rutas públicas: GET /v1/projects, /v1/projects/{projectId} y /v1/projects/{projectId}/stats. */
-export function createProjectHandlers(repository: ProjectRepository) {
+const PROJECT_NOT_FOUND = 'Proyecto no encontrado';
+
+/**
+ * Rutas públicas (catálogo) y de gestión (GESTOR con `api/projects.write`, HU-08).
+ * API Gateway ya verificó el access token y el scope de las rutas de gestión; aquí se exige
+ * además el scope y el grupo GESTOR (defensa en profundidad, CA-04.1).
+ */
+export function createProjectHandlers(
+  repository: ProjectRepository,
+  options: ProjectHandlerOptions = {},
+) {
+  const now = options.now ?? (() => new Date().toISOString());
+  const newId = options.newId ?? randomUUID;
+
   // Un ID mal formado, inexistente o de un BORRADOR responde igual: 404 sin contenido (CA-02.2).
   async function findPublished(event: APIGatewayProxyEventV2): Promise<Project> {
     const parsed = projectIdSchema.safeParse(event.pathParameters?.projectId);
-    if (!parsed.success) throw notFound('Proyecto no encontrado');
+    if (!parsed.success) throw notFound(PROJECT_NOT_FOUND);
     const project = await repository.findById(parsed.data);
-    if (project?.status !== 'PUBLICADO') throw notFound('Proyecto no encontrado');
+    if (project?.status !== 'PUBLICADO') throw notFound(PROJECT_NOT_FOUND);
     return project;
+  }
+
+  function requireManager(event: APIGatewayProxyEventV2WithJWTAuthorizer): void {
+    const identity = getIdentity(event);
+    requireScope(identity, SCOPES.projectsWrite);
+    requireGroup(identity, 'GESTOR');
+  }
+
+  function managedProjectId(event: APIGatewayProxyEventV2WithJWTAuthorizer): string {
+    const parsed = projectIdSchema.safeParse(event.pathParameters?.projectId);
+    if (!parsed.success) throw notFound(PROJECT_NOT_FOUND);
+    return parsed.data;
   }
 
   return {
@@ -31,9 +62,82 @@ export function createProjectHandlers(repository: ProjectRepository) {
     getProjectStats: withHttp('projects.stats', async (event: APIGatewayProxyEventV2) =>
       json(200, toProjectStats(await findPublished(event))),
     ),
+
+    /** GET /v1/manage/projects: todos los proyectos, también los BORRADOR. */
+    listManagedProjects: withHttp(
+      'projects.listManaged',
+      async (event: APIGatewayProxyEventV2WithJWTAuthorizer) => {
+        requireManager(event);
+        const projects = await repository.listAll();
+        return json(200, { items: projects.map(toPublicProject) });
+      },
+    ),
+
+    /** POST /v1/projects: crea en BORRADOR con 0 recaudado (CA-08.1). */
+    createProject: withHttp(
+      'projects.create',
+      async (event: APIGatewayProxyEventV2WithJWTAuthorizer) => {
+        requireManager(event);
+        const input = parseJsonBody(event, createProjectSchema);
+        const timestamp = now();
+        const project: Project = {
+          projectId: newId(),
+          ...input,
+          confirmedAmountCents: 0,
+          currency: 'PEN',
+          status: 'BORRADOR',
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+        await repository.create(project);
+        const response = json(201, toPublicProject(project));
+        return {
+          ...response,
+          headers: { ...response.headers, location: `/v1/projects/${project.projectId}` },
+        };
+      },
+    ),
+
+    /** PATCH /v1/projects/{projectId}: edición según la decisión D2. */
+    updateProject: withHttp(
+      'projects.update',
+      async (event: APIGatewayProxyEventV2WithJWTAuthorizer) => {
+        requireManager(event);
+        const projectId = managedProjectId(event);
+        const changes = parseJsonBody(event, updateProjectSchema);
+        const result = await repository.update(projectId, changes, now());
+        if (!result.ok) {
+          if (result.reason === 'NOT_FOUND') throw notFound(PROJECT_NOT_FOUND);
+          throw conflict('La meta no puede ser menor que el monto ya recaudado');
+        }
+        return json(200, toPublicProject(result.project));
+      },
+    ),
+
+    /** PATCH /v1/projects/{projectId}/publish: BORRADOR → PUBLICADO (CA-08.2). */
+    publishProject: withHttp(
+      'projects.publish',
+      async (event: APIGatewayProxyEventV2WithJWTAuthorizer) => {
+        requireManager(event);
+        const projectId = managedProjectId(event);
+        const result = await repository.publish(projectId, now());
+        if (!result.ok) {
+          if (result.reason === 'NOT_FOUND') throw notFound(PROJECT_NOT_FOUND);
+          throw conflict('El proyecto ya está publicado');
+        }
+        return json(200, toPublicProject(result.project));
+      },
+    ),
   };
 }
 
 // Puntos de entrada de Lambda (uno por caso de uso, cada uno con su propio rol IAM en SAM).
-export const { listProjects, getProject, getProjectStats } =
-  createProjectHandlers(getProjectRepository());
+export const {
+  listProjects,
+  getProject,
+  getProjectStats,
+  listManagedProjects,
+  createProject,
+  updateProject,
+  publishProject,
+} = createProjectHandlers(getProjectRepository());

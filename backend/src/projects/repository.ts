@@ -1,14 +1,38 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 import { z } from 'zod';
-import { PROJECT_STATUSES, type Project } from './model.ts';
+import { PROJECT_STATUSES, type Project, type ProjectStatus } from './model.ts';
+import type { UpdateProjectInput } from './schemas.ts';
 import { SEED_PROJECTS } from './seed.ts';
+
+/** Resultado de una escritura condicionada: o el proyecto actualizado, o el motivo del rechazo. */
+export type WriteResult<Reason extends string> =
+  { ok: true; project: Project } | { ok: false; reason: 'NOT_FOUND' | Reason };
 
 /** Acceso a datos de proyectos. Los handlers no saben si detrás hay memoria o DynamoDB. */
 export interface ProjectRepository {
   listPublished(): Promise<Project[]>;
+  /** Todos los proyectos, también los BORRADOR (solo para el GESTOR). */
+  listAll(): Promise<Project[]>;
   findById(projectId: string): Promise<Project | undefined>;
+  create(project: Project): Promise<void>;
+  /** Decisión D2: la meta nunca queda por debajo de lo ya recaudado. */
+  update(
+    projectId: string,
+    changes: UpdateProjectInput,
+    now: string,
+  ): Promise<WriteResult<'GOAL_BELOW_CONFIRMED'>>;
+  /** BORRADOR → PUBLICADO; publicar uno ya publicado se rechaza (CA-08.2). */
+  publish(projectId: string, now: string): Promise<WriteResult<'ALREADY_PUBLISHED'>>;
 }
+
+const newestFirst = (a: Project, b: Project) => b.createdAt.localeCompare(a.createdAt);
 
 /** Datos de prueba para el desarrollo local y las pruebas automáticas. */
 export class InMemoryProjectRepository implements ProjectRepository {
@@ -19,16 +43,56 @@ export class InMemoryProjectRepository implements ProjectRepository {
   }
 
   listPublished(): Promise<Project[]> {
-    const published = [...this.#projects.values()]
-      .filter((project) => project.status === 'PUBLICADO')
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .map((project) => ({ ...project }));
-    return Promise.resolve(published);
+    return this.listAll().then((all) => all.filter((project) => project.status === 'PUBLICADO'));
+  }
+
+  listAll(): Promise<Project[]> {
+    return Promise.resolve(
+      [...this.#projects.values()].sort(newestFirst).map((project) => ({ ...project })),
+    );
   }
 
   findById(projectId: string): Promise<Project | undefined> {
     const project = this.#projects.get(projectId);
     return Promise.resolve(project && { ...project });
+  }
+
+  create(project: Project): Promise<void> {
+    if (this.#projects.has(project.projectId)) {
+      return Promise.reject(new Error('El proyecto ya existe'));
+    }
+    this.#projects.set(project.projectId, { ...project });
+    return Promise.resolve();
+  }
+
+  update(
+    projectId: string,
+    changes: UpdateProjectInput,
+    now: string,
+  ): Promise<WriteResult<'GOAL_BELOW_CONFIRMED'>> {
+    const current = this.#projects.get(projectId);
+    if (!current) return Promise.resolve({ ok: false, reason: 'NOT_FOUND' });
+    if (
+      changes.goalAmountCents !== undefined &&
+      changes.goalAmountCents < current.confirmedAmountCents
+    ) {
+      return Promise.resolve({ ok: false, reason: 'GOAL_BELOW_CONFIRMED' });
+    }
+    // Zod solo deja en `changes` los campos que llegaron en el cuerpo.
+    const updated: Project = { ...current, ...changes, updatedAt: now };
+    this.#projects.set(projectId, updated);
+    return Promise.resolve({ ok: true, project: { ...updated } });
+  }
+
+  publish(projectId: string, now: string): Promise<WriteResult<'ALREADY_PUBLISHED'>> {
+    const current = this.#projects.get(projectId);
+    if (!current) return Promise.resolve({ ok: false, reason: 'NOT_FOUND' });
+    if (current.status !== 'BORRADOR') {
+      return Promise.resolve({ ok: false, reason: 'ALREADY_PUBLISHED' });
+    }
+    const published: Project = { ...current, status: 'PUBLICADO', updatedAt: now };
+    this.#projects.set(projectId, published);
+    return Promise.resolve({ ok: true, project: { ...published } });
   }
 }
 
@@ -62,7 +126,112 @@ export class DynamoProjectRepository implements ProjectRepository {
   }
 
   /** Solo `Query` sobre el GSI: el rol de la Lambda de listado no puede hacer `Scan`. */
-  async listPublished(): Promise<Project[]> {
+  listPublished(): Promise<Project[]> {
+    return this.#queryByStatus('PUBLICADO');
+  }
+
+  /** Dos consultas al mismo GSI (una por estado), sin `Scan` de la tabla. */
+  async listAll(): Promise<Project[]> {
+    const [drafts, published] = await Promise.all([
+      this.#queryByStatus('BORRADOR'),
+      this.#queryByStatus('PUBLICADO'),
+    ]);
+    return [...drafts, ...published].sort(newestFirst);
+  }
+
+  async findById(projectId: string): Promise<Project | undefined> {
+    const { Item } = await this.#client.send(
+      new GetCommand({ TableName: this.#tableName, Key: { projectId } }),
+    );
+    return Item ? projectRecordSchema.parse(Item) : undefined;
+  }
+
+  async create(project: Project): Promise<void> {
+    await this.#client.send(
+      new PutCommand({
+        TableName: this.#tableName,
+        Item: project,
+        // Un UUID repetido nunca sobrescribe un proyecto existente.
+        ConditionExpression: 'attribute_not_exists(projectId)',
+      }),
+    );
+  }
+
+  /**
+   * Una sola escritura condicionada: si en el mismo instante una confirmación sube
+   * `confirmedAmountCents`, DynamoDB evalúa la condición contra el valor más reciente.
+   */
+  async update(
+    projectId: string,
+    changes: UpdateProjectInput,
+    now: string,
+  ): Promise<WriteResult<'GOAL_BELOW_CONFIRMED'>> {
+    const fields = Object.entries(changes);
+    const names: Record<string, string> = { '#updatedAt': 'updatedAt' };
+    const values: Record<string, unknown> = { ':updatedAt': now };
+    const assignments = ['#updatedAt = :updatedAt'];
+    for (const [name, value] of fields) {
+      names[`#${name}`] = name;
+      values[`:${name}`] = value;
+      assignments.push(`#${name} = :${name}`);
+    }
+
+    let condition = 'attribute_exists(projectId)';
+    if (changes.goalAmountCents !== undefined) {
+      names['#confirmed'] = 'confirmedAmountCents';
+      condition += ' AND #confirmed <= :goalAmountCents';
+    }
+
+    return this.#conditionalUpdate(
+      new UpdateCommand({
+        TableName: this.#tableName,
+        Key: { projectId },
+        UpdateExpression: `SET ${assignments.join(', ')}`,
+        ConditionExpression: condition,
+        ExpressionAttributeNames: names,
+        ExpressionAttributeValues: values,
+        ReturnValues: 'ALL_NEW',
+        ReturnValuesOnConditionCheckFailure: 'ALL_OLD',
+      }),
+      'GOAL_BELOW_CONFIRMED',
+    );
+  }
+
+  publish(projectId: string, now: string): Promise<WriteResult<'ALREADY_PUBLISHED'>> {
+    return this.#conditionalUpdate(
+      new UpdateCommand({
+        TableName: this.#tableName,
+        Key: { projectId },
+        UpdateExpression: 'SET #status = :published, #updatedAt = :now',
+        ConditionExpression: 'attribute_exists(projectId) AND #status = :draft',
+        ExpressionAttributeNames: { '#status': 'status', '#updatedAt': 'updatedAt' },
+        ExpressionAttributeValues: {
+          ':published': 'PUBLICADO' satisfies ProjectStatus,
+          ':draft': 'BORRADOR' satisfies ProjectStatus,
+          ':now': now,
+        },
+        ReturnValues: 'ALL_NEW',
+        ReturnValuesOnConditionCheckFailure: 'ALL_OLD',
+      }),
+      'ALREADY_PUBLISHED',
+    );
+  }
+
+  /** Si la condición falla, `ALL_OLD` distingue «no existe» (sin Item) del otro motivo. */
+  async #conditionalUpdate<Reason extends string>(
+    command: UpdateCommand,
+    reason: Reason,
+  ): Promise<WriteResult<Reason>> {
+    try {
+      const { Attributes } = await this.#client.send(command);
+      return { ok: true, project: projectRecordSchema.parse(Attributes) };
+    } catch (error) {
+      if (!(error instanceof ConditionalCheckFailedException)) throw error;
+      return { ok: false, reason: error.Item ? reason : 'NOT_FOUND' };
+    }
+  }
+
+  async #queryByStatus(status: ProjectStatus): Promise<Project[]> {
     const projects: Project[] = [];
     let exclusiveStartKey: Record<string, unknown> | undefined;
     do {
@@ -73,7 +242,7 @@ export class DynamoProjectRepository implements ProjectRepository {
           // `status` es una palabra reservada de DynamoDB.
           KeyConditionExpression: '#status = :status',
           ExpressionAttributeNames: { '#status': 'status' },
-          ExpressionAttributeValues: { ':status': 'PUBLICADO' },
+          ExpressionAttributeValues: { ':status': status },
           ScanIndexForward: false,
           ExclusiveStartKey: exclusiveStartKey,
         }),
@@ -82,13 +251,6 @@ export class DynamoProjectRepository implements ProjectRepository {
       exclusiveStartKey = page.LastEvaluatedKey;
     } while (exclusiveStartKey);
     return projects;
-  }
-
-  async findById(projectId: string): Promise<Project | undefined> {
-    const { Item } = await this.#client.send(
-      new GetCommand({ TableName: this.#tableName, Key: { projectId } }),
-    );
-    return Item ? projectRecordSchema.parse(Item) : undefined;
   }
 }
 
