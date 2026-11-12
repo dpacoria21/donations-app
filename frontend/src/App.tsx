@@ -1,13 +1,28 @@
+import { lazy, Suspense } from 'react';
 import { Link, NavLink, Route, Routes } from 'react-router';
 import { useAuth } from './auth/context.ts';
 import { AccountPage } from './pages/AccountPage.tsx';
 import { CallbackPage } from './pages/CallbackPage.tsx';
 import { HomePage } from './pages/HomePage.tsx';
+import { NotFoundPage } from './pages/NotFoundPage.tsx';
+import { ProjectPage } from './pages/ProjectPage.tsx';
+
+// Las páginas del GESTOR (con React Hook Form y Zod) se descargan solo si se visitan.
+const ManagePage = lazy(() =>
+  import('./pages/ManagePage.tsx').then((module) => ({ default: module.ManagePage })),
+);
+const ProjectFormPage = lazy(() =>
+  import('./pages/ProjectFormPage.tsx').then((module) => ({ default: module.ProjectFormPage })),
+);
 
 const navLink = ({ isActive }: { isActive: boolean }) =>
   `rounded px-2 py-1 ${isActive ? 'font-semibold text-sky-900 underline' : 'text-sky-800 hover:underline'}`;
 
 export function App() {
+  const { user } = useAuth();
+  // Solo orienta la navegación: el API exige el grupo GESTOR en cada solicitud.
+  const isManager = user?.groups.includes('GESTOR') ?? false;
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <a
@@ -20,10 +35,15 @@ export function App() {
         <Link to="/" className="font-bold text-sky-800">
           Fundación AQP-SOLIDARIA
         </Link>
-        <nav aria-label="Principal" className="flex items-center gap-2">
+        <nav aria-label="Principal" className="flex flex-wrap items-center gap-2">
           <NavLink to="/" end className={navLink}>
-            Inicio
+            Proyectos
           </NavLink>
+          {isManager && (
+            <NavLink to="/gestion" className={navLink}>
+              Gestión
+            </NavLink>
+          )}
           <NavLink to="/cuenta" className={navLink}>
             Mi cuenta
           </NavLink>
@@ -34,12 +54,24 @@ export function App() {
         Prototipo académico: las donaciones son simuladas y no se realiza ningún cobro.
       </p>
       <main id="contenido" tabIndex={-1} className="mx-auto max-w-3xl px-4 py-6">
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/auth/callback" element={<CallbackPage />} />
-          <Route path="/cuenta" element={<AccountPage />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <Suspense
+          fallback={
+            <p role="status" className="mt-2">
+              Cargando…
+            </p>
+          }
+        >
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/proyectos/:projectId" element={<ProjectPage />} />
+            <Route path="/gestion" element={<ManagePage />} />
+            <Route path="/gestion/nuevo" element={<ProjectFormPage mode="create" />} />
+            <Route path="/gestion/:projectId/editar" element={<ProjectFormPage mode="edit" />} />
+            <Route path="/auth/callback" element={<CallbackPage />} />
+            <Route path="/cuenta" element={<AccountPage />} />
+            <Route path="*" element={<NotFoundPage />} />
+          </Routes>
+        </Suspense>
       </main>
     </div>
   );
@@ -60,16 +92,5 @@ function SessionButton() {
     <button type="button" onClick={() => void login()} className={className}>
       Iniciar sesión
     </button>
-  );
-}
-
-function NotFound() {
-  return (
-    <>
-      <h1 className="text-2xl font-bold">Página no encontrada</h1>
-      <Link to="/" className="mt-4 inline-block text-sky-800 underline">
-        Volver al inicio
-      </Link>
-    </>
   );
 }

@@ -109,11 +109,11 @@ flowchart LR
 
 ### Repudio (Repudiation)
 
-| ID  | Amenaza                                               | Límite | Control                                                                      | Evidencia | Estado   |
-| --- | ----------------------------------------------------- | ------ | ---------------------------------------------------------------------------- | --------- | -------- |
-| R1  | Un usuario niega haber donado o publicado un proyecto | TB4    | `AuditEvents` con `sub`, acción, resultado, `requestId` y fecha              | HU-10     | ⬜ F4/F6 |
-| R2  | Un cambio de infraestructura sin autor identificable  | TB6    | CloudTrail; cambios solo por PR revisado y plantilla SAM                     | CA-NF07.2 | ⬜ F6    |
-| R3  | No poder reconstruir una solicitud fallida            | TB4    | Log JSON por solicitud con `requestId`, acción, resultado, código y duración | CA-NF07.1 | ✅ F1    |
+| ID  | Amenaza                                               | Límite | Control                                                                                                              | Evidencia      | Estado                              |
+| --- | ----------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------- | -------------- | ----------------------------------- |
+| R1  | Un usuario niega haber donado o publicado un proyecto | TB4    | `AuditEvents` con actor seudonimizado, acción, resultado, `requestId` y fecha, en la misma transacción que el cambio | CA-08.3, HU-10 | 🟡 F3 (proyectos) / F4 (donaciones) |
+| R2  | Un cambio de infraestructura sin autor identificable  | TB6    | CloudTrail; cambios solo por PR revisado y plantilla SAM                                                             | CA-NF07.2      | ⬜ F6                               |
+| R3  | No poder reconstruir una solicitud fallida            | TB4    | Log JSON por solicitud con `requestId`, acción, resultado, código y duración                                         | CA-NF07.1      | ✅ F1                               |
 
 ### Divulgación de información (Information disclosure)
 

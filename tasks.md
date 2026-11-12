@@ -25,8 +25,8 @@ requirements.md §7.
 | ---- | ---------------------------------------- | --------- |
 | 0    | Cuenta AWS, repositorio y documentos     | Completa¹ |
 | 1    | Esqueletos (backend y frontend) y CI     | Completa  |
-| 2    | Infraestructura base y autenticación     | Pendiente |
-| 3    | Proyectos y catálogo                     | En curso  |
+| 2    | Infraestructura base y autenticación     | Completa² |
+| 3    | Proyectos y catálogo                     | Completa  |
 | 4    | Donaciones e idempotencia                | Pendiente |
 | 5    | Simulación, concurrencia, MFA y frontend | Pendiente |
 | 6    | Endurecimiento y evidencias              | Pendiente |
@@ -34,6 +34,7 @@ requirements.md §7.
 | 8    | Cierre, entrega y limpieza               | Pendiente |
 
 ¹ Falta solo invitar al resto del equipo a la cuenta AWS con MFA, cuando se sumen (D3).
+² Falta T11 con un ID token en Postman, para cerrar la decisión D4.
 
 ---
 
@@ -225,30 +226,69 @@ Parte 2 de la fase: definido en `infra/template.yaml` y probado en
 - [x] `GET /v1/projects/{projectId}/stats`: solo el acumulado confirmado, sin datos de donantes
       (CA-09.2). CA-09.1 queda completo cuando la simulación de la fase 5 sea lo único que
       incrementa `confirmedAmountCents`.
-- [ ] Llevar los tres endpoints a DynamoDB y desplegarlos.
-- [ ] `POST /v1/projects`: GESTOR con el scope `api/projects.write`. Valida título, descripción
-      y `goalAmountCents` entero positivo, crea en BORRADOR y responde 201/400/401/403 (CA-08.1,
-      CA-04.1).
-- [ ] `PATCH /v1/projects/{projectId}/publish`: solo GESTOR. Publicar uno ya publicado → 409;
-      inexistente → 404 (CA-08.2).
-- [ ] Edición de proyectos. Ver la decisión D2.
-- [ ] Módulo `audit`: cada creación o publicación registra un `AuditEvent` con actor
-      seudonimizado, fecha, acción y resultado, sin tokens ni datos financieros (CA-08.3,
-      CA-10.2).
+- [x] Llevar los tres endpoints a DynamoDB y desplegarlos (fase 2).
+      Parte 1 de la fase: código, plantilla, OpenAPI y Postman listos; falta desplegarlo.
+
+- [x] `POST /v1/projects`: GESTOR con el scope `api/projects.write`. Valida con Zod título,
+      descripción y `goalAmountCents` entero positivo (máximo S/ 1 000 000), rechaza campos extra
+      como `status` o `confirmedAmountCents`, crea en BORRADOR y responde 201/400/401/403
+      (CA-08.1, CA-04.1).
+- [x] `PATCH /v1/projects/{projectId}/publish`: solo GESTOR, con escritura condicionada
+      `status = BORRADOR`. Publicar uno ya publicado → 409; inexistente → 404 (CA-08.2).
+- [x] `PATCH /v1/projects/{projectId}`: edición según la decisión D2 (título, descripción y
+      meta; la meta nunca por debajo de `confirmedAmountCents`, con escritura condicionada).
+- [x] `GET /v1/manage/projects`: el GESTOR ve todos los proyectos, también los BORRADOR, con dos
+      `Query` al GSI (sin `Scan`).
+- [x] Cuatro funciones nuevas en SAM, cada una con su rol y una sola acción de DynamoDB
+      (`Query`, `PutItem` o `UpdateItem`). Una prueba verifica que ninguna función de una ruta
+      pública puede escribir (T10).
+- [x] La vista pública incluye `updatedAt` para mostrar «Última actualización» (D2).
+- [x] Desplegado (2026-11-12) y probado desde la SPA contra el stage con `gestor1` y `donante1`:
+      validaciones, crear (meta S/ 3 000,50 → 300 050 céntimos), editar solo el título, meta menor
+      que lo recaudado → 409 sin cambiar el proyecto, publicar y verlo en el catálogo.
+- [x] Auditoría verificada en `AuditEvents`: `PROJECT_CREATE`, `PROJECT_UPDATE` (con
+      `changedFields: title`) y `PROJECT_PUBLISH` como SUCCESS, el 409 como REJECTED y el intento
+      del donante como DENIED, todos con actor seudonimizado y `requestId`.
+- [ ] Ejecutar la carpeta «Proyectos (gestión)» de Postman y guardar el reporte en `evidence/`.
+- [x] Módulo `audit` (parte 2 de la fase): cada creación, edición o publicación registra un
+      `AuditEvent` con actor seudonimizado (HMAC del `sub`), rol, fecha, `requestId`, acción,
+      recurso y resultado, sin tokens, montos ni textos (CA-08.3, CA-10.2):
+  - Éxito: el evento se guarda en la **misma transacción** (`TransactWriteItems`) que el
+    cambio; no hay cambios sin rastro.
+  - 403 → `DENIED`; 400, 404 y 409 → `REJECTED`, registrados aparte. Si ese registro falla, la
+    respuesta no cambia y queda un log de error.
+  - Las ediciones guardan solo los nombres de los campos cambiados.
+  - Limitación: la clave del seudónimo es el `StackId` (no es secreta para quien administra
+    la cuenta). En producción sería una clave de KMS o de Secrets Manager.
 
 ### Pruebas de la fase
 
 - [x] T01 unitaria: el visitante ve 200 y ningún borrador (CA-01.1, CA-01.2).
-- [ ] T01 contra el stage desplegado.
-- [ ] T03: un donante intenta crear un proyecto → 403 (CA-04.1).
+- [x] T01 contra el stage desplegado: solo devuelve los proyectos PUBLICADO (fase 2).
+- [x] T03 automatizada: un DONANTE (incluso con el scope) intenta crear, editar o publicar → 403,
+      en el handler y a través del servidor local (CA-04.1).
+- [x] T03 contra el stage desplegado (desde la SPA con `donante1`): 403 de la Lambda (el token
+      tenía el scope, no el grupo), evento DENIED en la auditoría y ningún proyecto creado.
+- [x] T12 desde la SPA: «Mi cuenta» de un GESTOR recibe 403 al pedir `/v1/donations/me`.
 
 ### Frontend
 
-- [ ] Catálogo con nombre, finalidad, meta y suma confirmada en formato PEN, y un estado vacío
-      comprensible (HU-01, CA-09.1).
-- [ ] Detalle con identificador, descripción, objetivo, estado y monto acumulado, y una página
-      404 (HU-02).
-- [ ] Pantallas del GESTOR para crear y publicar proyectos (HU-08).
+Parte 3 de la fase: probado con 57 pruebas de interfaz y revisado en el navegador contra el
+stage desplegado (móvil y escritorio).
+
+- [x] Catálogo con nombre, finalidad, meta y suma confirmada en formato PEN, barra de avance
+      accesible y un estado vacío comprensible (HU-01, CA-09.1, CA-01.3).
+- [x] Detalle con identificador, descripción, estado, avance confirmado y «Última
+      actualización», y una página 404 para proyectos inexistentes o en borrador (HU-02).
+- [x] Pantallas del GESTOR (`/gestion`) para listar, crear, editar y publicar proyectos, con
+      React Hook Form + Zod. La meta se escribe en soles y se envía en céntimos enteros sin pasar
+      por `float`; una edición envía solo los campos cambiados (HU-08, D2).
+- [x] Formularios accesibles: etiquetas, ayudas y errores asociados con `aria-describedby`, y
+      `aria-invalid` en los campos con error (CA-NF06.2).
+- [x] Los errores 403 y 409 del API se muestran tal cual: la interfaz no decide permisos.
+- [x] Las páginas del GESTOR se cargan bajo demanda (el bundle principal pasó de 501 a 375 KB).
+- [x] Gestión probada con un usuario GESTOR real contra el stage desplegado. Corregido tras la
+      prueba: el aviso del formulario ya no se acumula con el de publicar.
 
 ## Fase 4 — Donaciones e idempotencia (día 4)
 
@@ -375,22 +415,22 @@ Parte 2 de la fase: definido en `infra/template.yaml` y probado en
 
 ## Matriz de pruebas T01–T14
 
-| ID  | Escenario                                 | Esperado                           | Fase | Automática      | Evidencia AWS |
-| --- | ----------------------------------------- | ---------------------------------- | ---- | --------------- | ------------- |
-| T01 | Visitante consulta proyectos              | 200, sin borradores                | 3    | ✅ (en memoria) | ⬜            |
-| T02 | Sin token intenta donar                   | 401                                | 2    | ⬜              | ⬜            |
-| T03 | Donante intenta crear proyecto            | 403                                | 3    | ⬜              | ⬜            |
-| T04 | Donante envía 0, 100001 o valor no entero | 400                                | 4    | ⬜              | ⬜            |
-| T05 | Donante crea intención válida             | 201, pendiente, sin cargo          | 4    | ⬜              | ⬜            |
-| T06 | Repite clave y payload idénticos          | Mismo resultado, una sola donación | 4    | ⬜              | ⬜            |
-| T07 | Repite clave con payload distinto         | 409                                | 4    | ⬜              | ⬜            |
-| T08 | 10 confirmaciones concurrentes            | Un solo incremento                 | 5    | ⬜              | ⬜            |
-| T09 | Donante consulta donación ajena           | 403/404 sin filtración             | 4    | ⬜              | ⬜            |
-| T10 | Lambda de listado intenta escribir        | `AccessDenied` y error controlado  | 6    | —               | ⬜            |
-| T11 | ID token o token alterado como Bearer     | 401                                | 2    | —               | ⬜            |
-| T12 | Gestor consulta historial de un donante   | 403/404                            | 4    | ⬜              | ⬜            |
-| T13 | Token revocado usado antes de expirar     | Aceptado hasta expirar; luego 401  | 5    | —               | ⬜            |
-| T14 | GESTOR inicia sesión sin segundo factor   | No obtiene tokens                  | 5    | —               | ⬜            |
+| ID  | Escenario                                 | Esperado                           | Fase | Automática | Evidencia AWS |
+| --- | ----------------------------------------- | ---------------------------------- | ---- | ---------- | ------------- |
+| T01 | Visitante consulta proyectos              | 200, sin borradores                | 3    | ✅         | ✅            |
+| T02 | Sin token intenta donar                   | 401                                | 2    | ✅         | ✅            |
+| T03 | Donante intenta crear proyecto            | 403                                | 3    | ✅         | ✅            |
+| T04 | Donante envía 0, 100001 o valor no entero | 400                                | 4    | ⬜         | ⬜            |
+| T05 | Donante crea intención válida             | 201, pendiente, sin cargo          | 4    | ⬜         | ⬜            |
+| T06 | Repite clave y payload idénticos          | Mismo resultado, una sola donación | 4    | ⬜         | ⬜            |
+| T07 | Repite clave con payload distinto         | 409                                | 4    | ⬜         | ⬜            |
+| T08 | 10 confirmaciones concurrentes            | Un solo incremento                 | 5    | ⬜         | ⬜            |
+| T09 | Donante consulta donación ajena           | 403/404 sin filtración             | 4    | ⬜         | ⬜            |
+| T10 | Lambda de listado intenta escribir        | `AccessDenied` y error controlado  | 6    | —          | ⬜            |
+| T11 | ID token o token alterado como Bearer     | 401                                | 2    | —          | ⬜            |
+| T12 | Gestor consulta historial de un donante   | 403/404                            | 4    | ✅         | ✅            |
+| T13 | Token revocado usado antes de expirar     | Aceptado hasta expirar; luego 401  | 5    | —          | ⬜            |
+| T14 | GESTOR inicia sesión sin segundo factor   | No obtiene tokens                  | 5    | —          | ⬜            |
 
 «—» indica que la prueba depende de API Gateway, IAM o Cognito y solo se puede demostrar contra
 AWS.
@@ -402,9 +442,19 @@ Conviene acordarlas con el docente antes de la fase indicada.
 - **D1 (fase 4):** T09 pide consultar una donación ajena, pero `GET /v1/donations/me` no
   recibe un ID. Propuesta: añadir `GET /v1/donations/{donationId}` (DONANTE propietario; 404 si
   es ajena) y documentarlo en OpenAPI.
-- **D2 (fase 3):** la matriz de roles dice «crear/editar/publicar», pero los endpoints no
-  incluyen la edición. Hay que decidir si se añade `PATCH /v1/projects/{projectId}` (solo en
-  BORRADOR) o si la edición queda fuera.
+- **D2 (fase 3) — Decidida el 2026-11-12:** la matriz de roles dice «crear/editar/publicar»,
+  pero design.md §4 no lista un endpoint de edición. Se añade `PATCH /v1/projects/{projectId}`
+  (GESTOR, `api/projects.write`):
+  - Se puede editar en cualquier estado: título, descripción y `goalAmountCents`. Así se
+    corrige una campaña publicada con datos erróneos sin ocultarla a quienes ya donaron.
+  - La meta nunca queda por debajo de `confirmedAmountCents` (409); la condición se evalúa en
+    la misma escritura de DynamoDB, a salvo de una confirmación simultánea.
+  - `confirmedAmountCents`, `status`, `currency` y `projectId` no se editan por esta ruta.
+  - No se puede despublicar: el modelo solo tiene BORRADOR → PUBLICADO, y ocultar una campaña
+    con donaciones pendientes las dejaría sin poder confirmarse.
+  - Cada edición genera un `AuditEvent` con los campos cambiados (parte 2 de la fase 3).
+  - Una campaña que no debería existir necesitaría un estado «Cerrada»: posible extensión,
+    fuera del MVP.
 - **D3 (fase 0):** CA-NF03.3 pide usuarios IAM con MFA, pero la cuenta usa la nueva experiencia
   de AWS, donde los integrantes se invitan como _team members_ desde AWS Settings. Hay que
   acordar cómo se acredita.

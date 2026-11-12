@@ -130,45 +130,62 @@ describe('infra/template.yaml: funciones Lambda', () => {
     }
   });
 
-  it('cada función solo tiene la acción de DynamoDB que necesita, sin escrituras (T10)', () => {
-    const expected: Record<string, { actions: string[]; table: string; envVar: string }> = {
-      ListProjectsFunction: {
-        actions: ['dynamodb:Query'],
-        table: 'ProjectsTable',
-        envVar: 'PROJECTS_TABLE',
+  it('cada función solo tiene las acciones de DynamoDB que necesita, por tabla (T10)', () => {
+    const PROJECTS = { PROJECTS_TABLE: { Ref: 'ProjectsTable' } };
+    const AUDIT = {
+      AUDIT_EVENTS_TABLE: { Ref: 'AuditEventsTable' },
+      AUDIT_PSEUDONYM_KEY: { Ref: 'AWS::StackId' },
+    };
+    const expected: Record<
+      string,
+      { access: Record<string, string[]>; env: Record<string, unknown> }
+    > = {
+      ListProjectsFunction: { access: { ProjectsTable: ['dynamodb:Query'] }, env: PROJECTS },
+      GetProjectFunction: { access: { ProjectsTable: ['dynamodb:GetItem'] }, env: PROJECTS },
+      GetProjectStatsFunction: { access: { ProjectsTable: ['dynamodb:GetItem'] }, env: PROJECTS },
+      ListManagedProjectsFunction: {
+        access: { ProjectsTable: ['dynamodb:Query'] },
+        env: PROJECTS,
       },
-      GetProjectFunction: {
-        actions: ['dynamodb:GetItem'],
-        table: 'ProjectsTable',
-        envVar: 'PROJECTS_TABLE',
+      CreateProjectFunction: {
+        access: { ProjectsTable: ['dynamodb:PutItem'], AuditEventsTable: ['dynamodb:PutItem'] },
+        env: { ...PROJECTS, ...AUDIT },
       },
-      GetProjectStatsFunction: {
-        actions: ['dynamodb:GetItem'],
-        table: 'ProjectsTable',
-        envVar: 'PROJECTS_TABLE',
+      UpdateProjectFunction: {
+        access: {
+          ProjectsTable: ['dynamodb:GetItem', 'dynamodb:UpdateItem'],
+          AuditEventsTable: ['dynamodb:PutItem'],
+        },
+        env: { ...PROJECTS, ...AUDIT },
+      },
+      PublishProjectFunction: {
+        access: {
+          ProjectsTable: ['dynamodb:GetItem', 'dynamodb:UpdateItem'],
+          AuditEventsTable: ['dynamodb:PutItem'],
+        },
+        env: { ...PROJECTS, ...AUDIT },
       },
       GetMyDonationsFunction: {
-        actions: ['dynamodb:Query'],
-        table: 'DonationsTable',
-        envVar: 'DONATIONS_TABLE',
+        access: { DonationsTable: ['dynamodb:Query'] },
+        env: { DONATIONS_TABLE: { Ref: 'DonationsTable' } },
       },
     };
     expect(functions.map(([name]) => name).sort()).toEqual(Object.keys(expected).sort());
 
-    for (const [name, { actions, table, envVar }] of Object.entries(expected)) {
-      const dynamo = statementsOf(roleOf(name)).filter((s) =>
-        s.Action.some((action) => action.startsWith('dynamodb:')),
-      );
-      expect(
-        dynamo.flatMap((s) => s.Action),
-        name,
-      ).toEqual(actions);
-      for (const statement of dynamo) {
-        expect(JSON.stringify(statement.Resource), name).toContain(table);
+    for (const [name, { access, env }] of Object.entries(expected)) {
+      const granted: Record<string, string[]> = {};
+      for (const statement of statementsOf(roleOf(name))) {
+        const actions = statement.Action.filter((action) => action.startsWith('dynamodb:'));
+        if (actions.length === 0) continue;
+        // `!GetAtt Tabla.Arn` o `!Sub ${Tabla.Arn}/index/...`: ambos nombran la tabla.
+        const sub = (statement.Resource as { 'Fn::Sub'?: string })['Fn::Sub'];
+        const table = sub
+          ? (/^\$\{(?<name>\w+)\.Arn\}/.exec(sub)?.groups?.name ?? sub)
+          : referencedName(statement.Resource);
+        granted[table] = [...(granted[table] ?? []), ...actions].sort();
       }
-      expect(resource(name).Properties.Environment).toEqual({
-        Variables: { [envVar]: { Ref: table } },
-      });
+      expect(granted, name).toEqual(access);
+      expect(resource(name).Properties.Environment, name).toEqual({ Variables: env });
     }
   });
 
@@ -325,5 +342,20 @@ describe('infra/template.yaml: Cognito (HU-03, HU-04, HU-11)', () => {
   it('managed login v2 tiene estilo asignado al app client', () => {
     expect(resource('UserPoolDomain').Properties.ManagedLoginVersion).toBe(2);
     expect(resource('WebClientBranding').Properties.ClientId).toEqual({ Ref: 'WebClient' });
+  });
+});
+
+describe('infra/template.yaml: funciones públicas de solo lectura (T10)', () => {
+  it('ninguna función de una ruta pública puede escribir en DynamoDB', () => {
+    const writes = /^dynamodb:(Put|Update|Delete|BatchWrite|TransactWrite)/;
+    for (const [name, fn] of functions) {
+      const events = Object.values(fn.Properties.Events as Record<string, Resource>);
+      if (events.some((event) => event.Properties.Auth !== undefined)) continue;
+      const actions = statementsOf(roleOf(name)).flatMap((statement) => statement.Action);
+      expect(
+        actions.filter((action) => writes.test(action)),
+        name,
+      ).toEqual([]);
+    }
   });
 });

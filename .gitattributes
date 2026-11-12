@@ -1,0 +1,13 @@
+# Saltos de línea LF en todas las computadoras del equipo (Windows, macOS y Linux), igual que
+# en el CI y en la configuración de Prettier. Tiene prioridad sobre `core.autocrlf` de cada uno.
+* text=auto eol=lf
+
+# Archivos binarios: nunca se convierten.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.pdf binary
+*.zip binary

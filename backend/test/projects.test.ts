@@ -34,6 +34,7 @@ describe('GET /v1/projects (HU-01)', () => {
       confirmedAmountCents: expect.any(Number) as unknown,
       currency: 'PEN',
       status: 'PUBLICADO',
+      updatedAt: expect.any(String) as unknown,
     });
   });
 
@@ -127,7 +128,11 @@ describe('manejo de errores', () => {
   it('un fallo inesperado responde 500 genérico sin detalles internos', async () => {
     const failing: ProjectRepository = {
       listPublished: () => Promise.reject(new Error('detalle interno: tabla Projects')),
+      listAll: () => Promise.reject(new Error('detalle interno')),
       findById: () => Promise.reject(new Error('detalle interno')),
+      create: () => Promise.reject(new Error('detalle interno')),
+      update: () => Promise.reject(new Error('detalle interno')),
+      publish: () => Promise.reject(new Error('detalle interno')),
     };
     const result = await createProjectHandlers(failing).listProjects(
       httpEvent({ requestId: 'req-500' }),

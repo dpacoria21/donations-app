@@ -4,10 +4,15 @@ SPA de la Plataforma de Donaciones Seguras: **React 19 + TypeScript + Vite 8 + T
 según [design.md](../design.md) §2. En AWS se publicará en un bucket S3 privado detrás de
 CloudFront con OAC (fase 5).
 
-Hoy incluye el aviso de prototipo académico, la comprobación de la conexión con el API
-(`GET /v1/projects`), el **inicio y cierre de sesión con Cognito** y la página **Mi cuenta** con
-el historial propio (`GET /v1/donations/me`). Usa React Router 8, TanStack Query 5 y
-oidc-client-ts 3. React Hook Form y Zod se añadirán con los formularios de la fase 3.
+Hoy incluye el **catálogo y el detalle de proyectos** con montos en PEN, el **inicio y cierre de
+sesión con Cognito**, la página **Mi cuenta** con el historial propio y las **pantallas del
+GESTOR** para crear, editar y publicar proyectos. Usa React Router 8, TanStack Query 5,
+oidc-client-ts 3, React Hook Form 7 y Zod 4.
+
+**Dinero:** el API trabaja en céntimos enteros (AD-04). Los formularios reciben soles
+(«4500,50») y [src/lib/format.ts](src/lib/format.ts) los convierte a céntimos sin pasar por
+`float`. La validación del formulario es solo para la experiencia de uso: el backend valida
+de nuevo con sus propias reglas.
 
 ## Configuración
 
@@ -48,11 +53,18 @@ del app client (parámetros `CallbackUrls` y `LogoutUrls` de `infra/template.yam
 
 ## Rutas
 
-| Ruta             | Contenido                                              |
-| ---------------- | ------------------------------------------------------ |
-| `/`              | Inicio y estado de la conexión con el API              |
-| `/cuenta`        | Datos de la sesión e historial propio (HU-07)          |
-| `/auth/callback` | Destino del managed login; canjea el código por tokens |
+| Ruta                         | Contenido                                               |
+| ---------------------------- | ------------------------------------------------------- |
+| `/`                          | Catálogo de proyectos publicados (HU-01)                |
+| `/proyectos/:projectId`      | Detalle, avance y última actualización (HU-02, HU-09)   |
+| `/gestion`                   | GESTOR: todos los proyectos, publicar (HU-08)           |
+| `/gestion/nuevo`             | GESTOR: crear un borrador                               |
+| `/gestion/:projectId/editar` | GESTOR: editar título, descripción y meta (decisión D2) |
+| `/cuenta`                    | Datos de la sesión e historial propio (HU-07)           |
+| `/auth/callback`             | Destino del managed login; canjea el código por tokens  |
+
+El enlace «Gestión» solo aparece para usuarios del grupo GESTOR, pero eso es solo orientación:
+el API rechaza con 403 a cualquier otro rol, y la interfaz muestra ese error tal cual.
 
 ## Comandos
 

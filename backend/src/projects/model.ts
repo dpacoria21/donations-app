@@ -14,7 +14,10 @@ export interface Project {
   updatedAt: string;
 }
 
-/** Vista pública: sin datos de donantes ni registros individuales (CA-02.1, CA-09.2). */
+/**
+ * Vista pública: sin datos de donantes ni registros individuales (CA-02.1, CA-09.2).
+ * `updatedAt` permite mostrar «Última actualización» si una campaña se edita (decisión D2).
+ */
 export interface PublicProject {
   projectId: string;
   title: string;
@@ -23,6 +26,7 @@ export interface PublicProject {
   confirmedAmountCents: number;
   currency: 'PEN';
   status: ProjectStatus;
+  updatedAt: string;
 }
 
 export interface ProjectStats {
@@ -42,6 +46,7 @@ export function toPublicProject(project: Project): PublicProject {
     confirmedAmountCents: project.confirmedAmountCents,
     currency: project.currency,
     status: project.status,
+    updatedAt: project.updatedAt,
   };
 }
 

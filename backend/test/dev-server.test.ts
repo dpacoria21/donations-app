@@ -153,3 +153,59 @@ describe('rutas protegidas: imitación del JWT authorizer (T02, T11)', () => {
     expect((await getMine(unconfiguredUrl, 'access-donante')).status).toBe(401);
   });
 });
+
+describe('rutas de gestión en el servidor local (T03)', () => {
+  const claimsFor = (group: string) => ({
+    sub: `b1f0c2d3-0000-4000-8000-0000000000${group === 'GESTOR' ? '0a' : '0b'}`,
+    token_use: 'access',
+    scope: 'openid api/projects.write',
+    'cognito:groups': [group],
+  });
+  const server = createDevServer({
+    verifyToken: (token) => Promise.resolve(claimsFor(token === 'gestor' ? 'GESTOR' : 'DONANTE')),
+  });
+  let url = '';
+
+  beforeAll(async () => {
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    url = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  const create = (token: string) =>
+    fetch(`${url}/v1/projects`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Huertos escolares en Paucarpata',
+        description: 'Semillas, herramientas y capacitación para huertos escolares.',
+        goalAmountCents: 300_000,
+      }),
+    });
+
+  it('el cuerpo JSON llega al handler y un GESTOR crea el proyecto: 201', async () => {
+    const response = await create('gestor');
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ status: 'BORRADOR' });
+  });
+
+  it('T03: un DONANTE con el mismo scope recibe 403 desde la Lambda', async () => {
+    const response = await create('donante');
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('rechaza cuerpos demasiado grandes: 413', async () => {
+    const response = await fetch(`${url}/v1/projects`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer gestor' },
+      body: 'x'.repeat(70 * 1024),
+    });
+    expect(response.status).toBe(413);
+  });
+});
