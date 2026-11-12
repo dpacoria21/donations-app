@@ -21,6 +21,8 @@
     "check": "npm run lint && npm run lint:api && npm run format:check && npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "3.1167.0",
+    "@aws-sdk/lib-dynamodb": "3.1167.0",
     "zod": "4.6.7"
   },
   "devDependencies": {

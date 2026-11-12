@@ -1,7 +1,7 @@
 # Tareas — Plataforma de Donaciones Seguras (2026)
 
 **Fuentes:** [requirements.md](./requirements.md) · [design.md](./design.md)
-**Última actualización:** 2026-11-11
+**Última actualización:** 2026-11-12
 
 Lista incremental para seguir el avance del MVP. Las fases siguen el plan del design.md §9.
 Cada tarea cita los identificadores HU/CA/T que cubre, para mantener la trazabilidad que pide
@@ -23,7 +23,7 @@ requirements.md §7.
 
 | Fase | Tema                                     | Estado    |
 | ---- | ---------------------------------------- | --------- |
-| 0    | Cuenta AWS, repositorio y documentos     | Pendiente |
+| 0    | Cuenta AWS, repositorio y documentos     | En curso  |
 | 1    | Esqueletos (backend y frontend) y CI     | Completa  |
 | 2    | Infraestructura base y autenticación     | Pendiente |
 | 3    | Proyectos y catálogo                     | En curso  |
@@ -37,6 +37,11 @@ requirements.md §7.
 
 ## Fase 0 — Cuenta AWS, repositorio y documentos (día 1)
 
+Los pasos sobre la cuenta y GitHub los hace una persona del equipo, siguiendo
+[docs/cuenta-aws.md](docs/cuenta-aws.md). Un asistente de IA no los ejecuta (design.md §10).
+
+- [ ] Iniciar sesión con credenciales temporales (`aws login --profile donations-dev`) y
+      comprobar con `aws sts get-caller-identity` que no es `root` (CA-NF03.3).
 - [ ] Confirmar la Región seleccionada en AWS Settings → View all projects → Overview →
       Additional Info → Region. Hoy figura `us-east-2`; todos los recursos regionales van allí
       (CA-NF09.1).
@@ -49,12 +54,20 @@ requirements.md §7.
       acceso de larga duración (CA-NF03.3). Ver la decisión D3.
 - [ ] Repositorio en GitHub con `main` protegida y PR con al menos una revisión de otro
       integrante (design.md §8).
-- [ ] Activar el secret scanning y Dependabot en GitHub (design.md §6.2).
+- [ ] Activar el secret scanning (con _push protection_) y las alertas de Dependabot en
+      GitHub (design.md §6.2).
+- [ ] Instalar AWS SAM CLI (`sam --version`); lo necesita la fase 2 para validar y desplegar.
+- [ ] Inventariar los recursos que ya existen en la cuenta (pilas, user pools, Lambdas, tablas,
+      buckets, CloudFront) y los que cobran por existir (EC2, NAT Gateway, IP elásticas). Se
+      sabe que queda el user pool de la demo Java `us-east-2_yAC3TdllN`; se borra en la fase 8.
 - [x] `.gitignore` que excluye `node_modules`, `dist`, `.aws-sam`, `.env*` y `.local/`
       (CA-NF01.2).
-- [ ] `docs/threat-model.md`: STRIDE resumido y mapeo NIST inicial (design.md §8).
-- [ ] Crear `AI_USAGE.md` con la tabla de design.md §10 e ir completándola en cada PR.
-- [ ] Actualizar `AGENTS.md`: todavía remite a un README raíz que ya no existe.
+- [x] `docs/threat-model.md`: STRIDE por límite de confianza, mapeo a NIST SP 800-207 y a
+      OWASP API Top 10, y riesgos residuales (design.md §8). Se actualiza al cerrar cada fase.
+- [x] `AI_USAGE.md` con las reglas y la tabla de design.md §10; se añade una fila por PR.
+- [x] `docs/cuenta-aws.md`: guía de los pasos manuales de esta fase.
+- [x] ~~Actualizar `AGENTS.md`~~: `AGENTS.md` y `CLAUDE.md` se retiraron del repositorio en el
+      commit `5d0e50a`. Las reglas para agentes de IA están ahora en `AI_USAGE.md`.
 
 ## Fase 1 — Esqueletos (backend y frontend) y CI
 
