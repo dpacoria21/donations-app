@@ -91,8 +91,8 @@ flowchart LR
 
 | ID  | Amenaza                                                 | Límite | Control                                                                          | Evidencia      | Estado |
 | --- | ------------------------------------------------------- | ------ | -------------------------------------------------------------------------------- | -------------- | ------ |
-| S1  | Token forjado, alterado, caducado o de otro user pool   | TB3    | JWT authorizer: firma (JWKS), `iss`, `exp` y `client_id`                         | T11, CA-NF02.1 | ⬜ F2  |
-| S2  | Usar un ID token como si fuera un access token          | TB3    | `AuthorizationScopes` en cada ruta protegida; el ID token no tiene scopes        | T11, D4        | ⬜ F2  |
+| S1  | Token forjado, alterado, caducado o de otro user pool   | TB3    | JWT authorizer: firma (JWKS), `iss`, `exp` y `client_id`                         | T11, CA-NF02.1 | ✅ F6  |
+| S2  | Usar un ID token como si fuera un access token          | TB3    | `AuthorizationScopes` en cada ruta protegida; el ID token no tiene scopes        | T11, D4        | ✅ F6  |
 | S3  | Contraseña robada de un GESTOR o AUDITOR                | TB2    | MFA TOTP obligatorio en roles privilegiados (no SMS)                             | T14, CA-11.2   | ✅ F5  |
 | S4  | Interceptar el código de autorización en la redirección | TB2    | PKCE, cliente público sin secreto, URLs de callback exactas, sin flujo implícito | Config. SAM    | ⬜ F2  |
 | S5  | Credenciales AWS de un integrante robadas o compartidas | TB6    | Sin root, MFA por integrante, credenciales temporales (`aws login`)              | CA-NF03.3      | ⬜ F0  |

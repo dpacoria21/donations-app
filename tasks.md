@@ -34,7 +34,7 @@ requirements.md §7.
 | 8    | Cierre, entrega y limpieza               | Pendiente |
 
 ¹ Falta solo invitar al resto del equipo a la cuenta AWS con MFA, cuando se sumen (D3).
-² T11 medido en el stage: el ID token recibe 403; falta que el docente confirme la decisión D4.
+² T11 medido en el stage: el ID token se rechaza con 403, como prevé design.md §4 (decisión D4).
 
 ---
 
@@ -544,12 +544,13 @@ Conviene acordarlas con el docente antes de la fase indicada.
 - **D3 (fase 0):** CA-NF03.3 pide usuarios IAM con MFA, pero la cuenta usa la nueva experiencia
   de AWS, donde los integrantes se invitan como _team members_ desde AWS Settings. Hay que
   acordar cómo se acredita.
-- **D4 (fase 2):** CA-03.2 y T11 piden 401 para un ID token, pero el JWT authorizer de HTTP API
-  acepta su firma y su `aud` (es el `client_id`) y lo rechaza por no tener scopes: responde
-  **403**. La Lambda además lo rechaza con 401 (`token_use`), aunque no llega a ejecutarse. El
-  servidor local imita los 403. Opciones: aceptar 403 como «rechazado» y documentarlo, o
-  quitar los scopes del authorizer y validarlos solo en Lambda (contradice design.md §4).
-  Confirmar con el docente tras medir el código real en el stage desplegado.
+- **D4 (fase 2) — Decidida el 2026-11-12:** se sigue design.md §4: «las rutas protegidas declaran
+  `AuthorizationScopes` en SAM, de modo que un ID token es rechazado». El JWT authorizer de HTTP
+  API acepta la firma y el `aud` del ID token (es el `client_id`), pero lo rechaza por no tener
+  scopes y responde **403**; un token alterado, vencido o ausente responde 401. Para T11 y CA-03.2
+  el ID token cuenta como rechazado con 403. La Lambda además lo rechazaría con 401
+  (`token_use`), aunque no llega a ejecutarse. No se quitan los scopes del authorizer, porque
+  eso contradiría design.md §4. Medido en el stage el 2026-11-12 (`evidence/api/report.md`).
 - **D5 (fase 5) — Decidida el 2026-11-14:** Cognito solo permite MFA obligatorio para todo
   el pool, y ya no se puede activar en un pool existente. Se mantiene el MFA opcional (TOTP)
   y un trigger _pre token generation_ rechaza la emisión de tokens a GESTOR y AUDITOR sin
