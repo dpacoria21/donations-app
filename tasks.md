@@ -375,7 +375,7 @@ frontend). Falta desplegar, publicar la SPA y reunir la evidencia de T08, T13 y 
       asignar el grupo; procedimiento en `docs/pruebas-manuales.md`.
 - [x] `gestor1` dado de alta con MFA (2026-11-14): sin grupo, `setup:mfa`, verificado
       `SOFTWARE_TOKEN_MFA` y grupo GESTOR reasignado.
-- [ ] Dar de alta con MFA a un AUDITOR de prueba.
+- [x] Dar de alta con MFA a un AUDITOR de prueba: `auditor1` (2026-11-12, `evidence/HU-10/`).
 - [ ] Demostrar que revocar el refresh token impide renovar la sesión, mientras que el access
       token emitido sigue valiendo hasta expirar (CA-03.3, CA-03.4). Procedimiento en
       `docs/pruebas-manuales.md`.
