@@ -23,7 +23,7 @@ requirements.md §7.
 
 | Fase | Tema                                     | Estado    |
 | ---- | ---------------------------------------- | --------- |
-| 0    | Cuenta AWS, repositorio y documentos     | En curso  |
+| 0    | Cuenta AWS, repositorio y documentos     | Completa¹ |
 | 1    | Esqueletos (backend y frontend) y CI     | Completa  |
 | 2    | Infraestructura base y autenticación     | Pendiente |
 | 3    | Proyectos y catálogo                     | En curso  |
@@ -32,6 +32,8 @@ requirements.md §7.
 | 6    | Endurecimiento y evidencias              | Pendiente |
 | 7    | Extensiones (opcional)                   | Pendiente |
 | 8    | Cierre, entrega y limpieza               | Pendiente |
+
+¹ Falta solo invitar al resto del equipo a la cuenta AWS con MFA, cuando se sumen (D3).
 
 ---
 
@@ -46,18 +48,28 @@ con la sesión del propietario y bajo su supervisión (design.md §10; ver `AI_U
 - [x] Región `us-east-2` confirmada en AWS Settings → Projects → Additional info (CA-NF09.1).
 - [x] Plan **Free** confirmado en AWS Settings → Billing: 119.93 USD de crédito, 176 días
       restantes (hasta el 2027-05-05) y 0.07 USD consumidos en noviembre (CA-NF09.1).
-- [ ] Revisar en la [lista oficial](https://docs.aws.amazon.com/accounts/latest/reference/supported-services-sign-up-new.html)
-      que estén Lambda, API Gateway, DynamoDB, Cognito, S3, CloudFront, CloudWatch,
-      CloudFormation/SAM, IAM, CloudTrail, Budgets y Verified Permissions (CA-NF09.1).
+- [x] Según la [lista oficial](https://docs.aws.amazon.com/accounts/latest/reference/supported-services-sign-up-new.html)
+      (revisada el 2026-11-12), el Free Tier incluye todos los servicios del diseño: Lambda,
+      API Gateway, DynamoDB, Cognito, S3, CloudFront, CloudWatch y CloudWatch Logs,
+      CloudFormation, Serverless Application Repository, IAM, STS, CloudTrail, Budgets,
+      Verified Permissions y CloudShell (CA-NF09.1). Restricciones que afectan al diseño:
+  - No hay Lambda@Edge ni funciones multirregión o entre regiones.
+  - IAM Access Analyzer no está disponible, salvo la _policy validation_. Para T10 se usará
+    la validación de políticas o el IAM Policy Simulator.
+  - El envío de SMS (End User Messaging SMS) solo existe en el plan de pago: el MFA de Cognito
+    debe ser TOTP, como ya prevé el diseño.
 - [x] Alerta de AWS Budgets `alerta-mensual-5usd`: 5 USD al mes sin restar créditos; avisa por
       correo al superar el 80% del gasto real y el 100% del previsto (CA-NF09.1).
-- [ ] Acceso del equipo: hoy el único _team member_ es el propietario. Falta invitar al resto,
-      confirmar que el inicio de sesión de cada uno usa MFA y que no hay llaves de acceso de
+- [x] MFA activo en el inicio de sesión del propietario de la cuenta (CA-NF03.3; confirmado
+      por el propietario el 2026-11-12).
+- [ ] Resto del equipo: hoy el único _team member_ es el propietario. Al invitar a cada
+      integrante, confirmar que su inicio de sesión usa MFA y que no tiene llaves de acceso de
       larga duración (CA-NF03.3). Ver la decisión D3.
-- [ ] Repositorio en GitHub con `main` protegida y PR con al menos una revisión de otro
-      integrante (design.md §8).
-- [ ] Activar el secret scanning (con _push protection_) y las alertas de Dependabot en
-      GitHub (design.md §6.2).
+- [x] Repositorio en GitHub con `main` protegida mediante un ruleset: sin borrado ni
+      _force push_, PR obligatorio y CI (`check (backend)`, `check (frontend)`) en verde
+      (design.md §8). Subir las aprobaciones requeridas a 1 cuando haya otros integrantes.
+- [x] Secret scanning con _push protection_ y alertas de Dependabot activos en GitHub
+      (design.md §6.2).
 - [x] AWS SAM CLI 1.172.1 instalado con `winget` (`sam --version`); lo necesita la fase 2.
       Abrir una terminal nueva para que el `PATH` lo reconozca.
 - [x] Inventario de la cuenta (2026-11-12, `us-east-2`):
