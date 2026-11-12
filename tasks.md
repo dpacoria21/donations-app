@@ -436,10 +436,14 @@ rendimiento, que necesita cargar 50 proyectos en la tabla compartida.
       log JSON de Lambda, con el resumen por ruta y estado (`evidence/observability/report.md`)
       (CA-NF07.2).
 - [x] CloudTrail registra cada `CreateChangeSet` y `ExecuteChangeSet` del stack (CA-NF07.2).
-- [ ] Rendimiento con 50 proyectos (CA-NF05.1, CA-NF05.2): el script `npm run evidence:perf`
-      está listo (calentamiento sin contar, 100 solicitudes secuenciales por ruta, p50/p95/p99).
-      Falta ejecutarlo: cargar los proyectos con `npm run seed:projects -- --load`, medir y
-      borrarlos con `--remove-load` (pasos en `docs/pruebas-manuales.md`).
+- [x] Rendimiento con 54 proyectos publicados (2026-11-12): p95 de 199 ms en el catálogo, 152 ms
+      en el detalle y 147 ms en las estadísticas, sin errores; el límite es 1500 ms. Medido
+      desde Perú con 5 solicitudes de calentamiento y 100 medidas por ruta; los 50 proyectos de
+      carga se borraron después (`evidence/performance/report.md`) (CA-NF05.1, CA-NF05.2).
+- [x] CORS de la SPA publicada: SAM no transformaba el `Fn::Split`/`Fn::Join` de
+      `CorsConfiguration` y el API seguía admitiendo solo `localhost` desde la fase 5, así que la
+      SPA en CloudFront no cargaba datos. Ahora `AllowOrigins: !Ref AllowedOrigins` y la URL de
+      CloudFront va en `samconfig.toml`; una prueba lo comprueba.
 - [x] Accesibilidad WCAG 2.2 AA (CA-NF06.1, CA-NF06.2): axe-core en CI sobre 8 pantallas y en
       el navegador (con contraste y tamaño de objetivos) sin violaciones; revisión manual a
       375 px y con teclado. Se corrigieron el aviso fuera de región, el foco visible y los

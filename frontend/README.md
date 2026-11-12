@@ -97,7 +97,11 @@ nueva. La confirmación simulada llega en la fase 5.
 La plantilla crea un bucket S3 **privado** y una distribución CloudFront que lo lee con OAC,
 solo por HTTPS y con una política de cabeceras de seguridad: CSP restrictiva (sin scripts ni
 estilos en línea), HSTS, `X-Content-Type-Options`, `Referrer-Policy` y `X-Frame-Options`.
-La URL de la SPA ya está registrada en el app client de Cognito y en el CORS del API.
+La URL de la SPA se registra sola en el app client de Cognito. En el CORS del API hay que
+añadirla a mano: SAM no admite funciones como `Fn::Split` en `CorsConfiguration`, así que va en
+el parámetro `AllowedOrigins` de `infra/samconfig.toml` (sin barra final). En un despliegue
+nuevo, tras el primer `sam deploy`, copiar la salida `SpaUrl` a ese parámetro y desplegar otra
+vez.
 
 1. Crear `frontend/.env.production.local` (ignorado por Git) con las salidas de la pila:
 
