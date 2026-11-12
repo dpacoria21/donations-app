@@ -25,7 +25,7 @@ requirements.md §7.
 | ---- | ---------------------------------------- | --------- |
 | 0    | Cuenta AWS, repositorio y documentos     | Completa¹ |
 | 1    | Esqueletos (backend y frontend) y CI     | Completa  |
-| 2    | Infraestructura base y autenticación     | Pendiente |
+| 2    | Infraestructura base y autenticación     | Completa² |
 | 3    | Proyectos y catálogo                     | Completa  |
 | 4    | Donaciones e idempotencia                | Pendiente |
 | 5    | Simulación, concurrencia, MFA y frontend | Pendiente |
@@ -34,6 +34,7 @@ requirements.md §7.
 | 8    | Cierre, entrega y limpieza               | Pendiente |
 
 ¹ Falta solo invitar al resto del equipo a la cuenta AWS con MFA, cuando se sumen (D3).
+² Falta T11 con un ID token en Postman, para cerrar la decisión D4.
 
 ---
 
