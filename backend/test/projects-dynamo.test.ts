@@ -89,6 +89,8 @@ describe('DynamoProjectRepository.findById', () => {
     expect(ddb.commandCalls(GetCommand)[0]?.args[0].input).toEqual({
       TableName: TABLE,
       Key: { projectId: first.projectId },
+      // Las lecturas públicas no necesitan lectura consistente (cuesta el doble).
+      ConsistentRead: false,
     });
   });
 

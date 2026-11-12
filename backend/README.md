@@ -192,7 +192,23 @@ backend/
 └── test/           # pruebas Vitest, incluida la revisión de infra/template.yaml
 ```
 
+## Auditoría
+
+[src/audit/](src/audit/model.ts) registra un evento por cada creación, edición o publicación de
+un proyecto (CA-08.3), en la tabla `AuditEvents` (PK `eventType`, SK `timestamp#eventId`):
+
+- Campos: `eventType`, `timestamp`, `requestId`, `actorRef`, `actorRole`, `action`,
+  `resourceRef`, `outcome` y, en ediciones, `changedFields`.
+- `actorRef` es un seudónimo: HMAC-SHA256 del `sub` con la clave del despliegue. El mismo
+  usuario siempre tiene el mismo seudónimo, pero el seudónimo no revela su identidad.
+- Nunca se guardan tokens, montos, textos del proyecto ni datos personales (CA-10.2).
+- Los éxitos se guardan en la misma transacción que el cambio. Los intentos denegados (403) o
+  rechazados (400, 404, 409) se registran aparte, para detectar abusos como T03.
+
+Para ver los eventos tras desplegar, en la consola: **DynamoDB → Tables →
+donations-academic-AuditEventsTable-… → Explore items**.
+
 ## Pendiente
 
-- Login en el frontend (fase 2, parte 3).
-- Donaciones: intención, idempotencia y simulación (fases 4 y 5); módulo `audit`.
+- Donaciones: intención, idempotencia y simulación (fases 4 y 5).
+- Consulta de auditoría para el AUDITOR (`GET /v1/audit`, extensión HU-10).

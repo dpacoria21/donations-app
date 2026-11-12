@@ -130,65 +130,62 @@ describe('infra/template.yaml: funciones Lambda', () => {
     }
   });
 
-  it('cada función solo tiene la acción de DynamoDB que necesita (T10)', () => {
-    const expected: Record<string, { actions: string[]; table: string; envVar: string }> = {
-      ListProjectsFunction: {
-        actions: ['dynamodb:Query'],
-        table: 'ProjectsTable',
-        envVar: 'PROJECTS_TABLE',
-      },
-      GetProjectFunction: {
-        actions: ['dynamodb:GetItem'],
-        table: 'ProjectsTable',
-        envVar: 'PROJECTS_TABLE',
-      },
-      GetProjectStatsFunction: {
-        actions: ['dynamodb:GetItem'],
-        table: 'ProjectsTable',
-        envVar: 'PROJECTS_TABLE',
-      },
+  it('cada función solo tiene las acciones de DynamoDB que necesita, por tabla (T10)', () => {
+    const PROJECTS = { PROJECTS_TABLE: { Ref: 'ProjectsTable' } };
+    const AUDIT = {
+      AUDIT_EVENTS_TABLE: { Ref: 'AuditEventsTable' },
+      AUDIT_PSEUDONYM_KEY: { Ref: 'AWS::StackId' },
+    };
+    const expected: Record<
+      string,
+      { access: Record<string, string[]>; env: Record<string, unknown> }
+    > = {
+      ListProjectsFunction: { access: { ProjectsTable: ['dynamodb:Query'] }, env: PROJECTS },
+      GetProjectFunction: { access: { ProjectsTable: ['dynamodb:GetItem'] }, env: PROJECTS },
+      GetProjectStatsFunction: { access: { ProjectsTable: ['dynamodb:GetItem'] }, env: PROJECTS },
       ListManagedProjectsFunction: {
-        actions: ['dynamodb:Query'],
-        table: 'ProjectsTable',
-        envVar: 'PROJECTS_TABLE',
+        access: { ProjectsTable: ['dynamodb:Query'] },
+        env: PROJECTS,
       },
       CreateProjectFunction: {
-        actions: ['dynamodb:PutItem'],
-        table: 'ProjectsTable',
-        envVar: 'PROJECTS_TABLE',
+        access: { ProjectsTable: ['dynamodb:PutItem'], AuditEventsTable: ['dynamodb:PutItem'] },
+        env: { ...PROJECTS, ...AUDIT },
       },
       UpdateProjectFunction: {
-        actions: ['dynamodb:UpdateItem'],
-        table: 'ProjectsTable',
-        envVar: 'PROJECTS_TABLE',
+        access: {
+          ProjectsTable: ['dynamodb:GetItem', 'dynamodb:UpdateItem'],
+          AuditEventsTable: ['dynamodb:PutItem'],
+        },
+        env: { ...PROJECTS, ...AUDIT },
       },
       PublishProjectFunction: {
-        actions: ['dynamodb:UpdateItem'],
-        table: 'ProjectsTable',
-        envVar: 'PROJECTS_TABLE',
+        access: {
+          ProjectsTable: ['dynamodb:GetItem', 'dynamodb:UpdateItem'],
+          AuditEventsTable: ['dynamodb:PutItem'],
+        },
+        env: { ...PROJECTS, ...AUDIT },
       },
       GetMyDonationsFunction: {
-        actions: ['dynamodb:Query'],
-        table: 'DonationsTable',
-        envVar: 'DONATIONS_TABLE',
+        access: { DonationsTable: ['dynamodb:Query'] },
+        env: { DONATIONS_TABLE: { Ref: 'DonationsTable' } },
       },
     };
     expect(functions.map(([name]) => name).sort()).toEqual(Object.keys(expected).sort());
 
-    for (const [name, { actions, table, envVar }] of Object.entries(expected)) {
-      const dynamo = statementsOf(roleOf(name)).filter((s) =>
-        s.Action.some((action) => action.startsWith('dynamodb:')),
-      );
-      expect(
-        dynamo.flatMap((s) => s.Action),
-        name,
-      ).toEqual(actions);
-      for (const statement of dynamo) {
-        expect(JSON.stringify(statement.Resource), name).toContain(table);
+    for (const [name, { access, env }] of Object.entries(expected)) {
+      const granted: Record<string, string[]> = {};
+      for (const statement of statementsOf(roleOf(name))) {
+        const actions = statement.Action.filter((action) => action.startsWith('dynamodb:'));
+        if (actions.length === 0) continue;
+        // `!GetAtt Tabla.Arn` o `!Sub ${Tabla.Arn}/index/...`: ambos nombran la tabla.
+        const sub = (statement.Resource as { 'Fn::Sub'?: string })['Fn::Sub'];
+        const table = sub
+          ? (/^\$\{(?<name>\w+)\.Arn\}/.exec(sub)?.groups?.name ?? sub)
+          : referencedName(statement.Resource);
+        granted[table] = [...(granted[table] ?? []), ...actions].sort();
       }
-      expect(resource(name).Properties.Environment).toEqual({
-        Variables: { [envVar]: { Ref: table } },
-      });
+      expect(granted, name).toEqual(access);
+      expect(resource(name).Properties.Environment, name).toEqual({ Variables: env });
     }
   });
 

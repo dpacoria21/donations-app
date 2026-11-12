@@ -576,6 +576,14 @@ Resources:
               - Effect: Allow
                 Action: [dynamodb:PutItem]
                 Resource: !GetAtt ProjectsTable.Arn
+        # El evento de auditoría va en la misma transacción (TransactWriteItems) que el cambio.
+        - PolicyName: write-audit-events
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:PutItem]
+                Resource: !GetAtt AuditEventsTable.Arn
 
   CreateProjectFunction:
     Type: AWS::Serverless::Function
@@ -590,6 +598,9 @@ Resources:
       Environment:
         Variables:
           PROJECTS_TABLE: !Ref ProjectsTable
+          AUDIT_EVENTS_TABLE: !Ref AuditEventsTable
+          # Clave del seudónimo del actor: única por despliegue (ver src/audit/model.ts).
+          AUDIT_PSEUDONYM_KEY: !Ref AWS::StackId
       Events:
         CreateProject:
           Type: HttpApi
@@ -612,7 +623,7 @@ Resources:
   UpdateProjectRole:
     Type: AWS::IAM::Role
     Properties:
-      Description: PATCH /v1/projects/{projectId}. Solo UpdateItem sobre Projects.
+      Description: PATCH /v1/projects/{projectId}. UpdateItem y GetItem sobre Projects; PutItem en AuditEvents.
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -628,13 +639,21 @@ Resources:
               - Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
                 Resource: !GetAtt UpdateProjectLogGroup.Arn
+        # GetItem: las transacciones no devuelven el ítem nuevo; se relee con ConsistentRead.
         - PolicyName: update-project
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action: [dynamodb:UpdateItem]
+                Action: [dynamodb:UpdateItem, dynamodb:GetItem]
                 Resource: !GetAtt ProjectsTable.Arn
+        - PolicyName: write-audit-events
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:PutItem]
+                Resource: !GetAtt AuditEventsTable.Arn
 
   UpdateProjectFunction:
     Type: AWS::Serverless::Function
@@ -649,6 +668,8 @@ Resources:
       Environment:
         Variables:
           PROJECTS_TABLE: !Ref ProjectsTable
+          AUDIT_EVENTS_TABLE: !Ref AuditEventsTable
+          AUDIT_PSEUDONYM_KEY: !Ref AWS::StackId
       Events:
         UpdateProject:
           Type: HttpApi
@@ -671,7 +692,7 @@ Resources:
   PublishProjectRole:
     Type: AWS::IAM::Role
     Properties:
-      Description: PATCH /v1/projects/{projectId}/publish. Solo UpdateItem sobre Projects.
+      Description: PATCH /v1/projects/{projectId}/publish. UpdateItem y GetItem sobre Projects; PutItem en AuditEvents.
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -692,8 +713,15 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action: [dynamodb:UpdateItem]
+                Action: [dynamodb:UpdateItem, dynamodb:GetItem]
                 Resource: !GetAtt ProjectsTable.Arn
+        - PolicyName: write-audit-events
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:PutItem]
+                Resource: !GetAtt AuditEventsTable.Arn
 
   PublishProjectFunction:
     Type: AWS::Serverless::Function
@@ -708,6 +736,8 @@ Resources:
       Environment:
         Variables:
           PROJECTS_TABLE: !Ref ProjectsTable
+          AUDIT_EVENTS_TABLE: !Ref AuditEventsTable
+          AUDIT_PSEUDONYM_KEY: !Ref AWS::StackId
       Events:
         PublishProject:
           Type: HttpApi

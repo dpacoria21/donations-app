@@ -244,9 +244,16 @@ Parte 2 de la fase: definido en `infra/template.yaml` y probado en
 - [x] La vista pública incluye `updatedAt` para mostrar «Última actualización» (D2).
 - [ ] Desplegar (`npm run build` y `sam deploy`) y ejecutar la carpeta «Proyectos (gestión)» de
       Postman con usuarios GESTOR y DONANTE.
-- [ ] Módulo `audit`: cada creación o publicación registra un `AuditEvent` con actor
-      seudonimizado, fecha, acción y resultado, sin tokens ni datos financieros (CA-08.3,
-      CA-10.2).
+- [x] Módulo `audit` (parte 2 de la fase): cada creación, edición o publicación registra un
+      `AuditEvent` con actor seudonimizado (HMAC del `sub`), rol, fecha, `requestId`, acción,
+      recurso y resultado, sin tokens, montos ni textos (CA-08.3, CA-10.2):
+  - Éxito: el evento se guarda en la **misma transacción** (`TransactWriteItems`) que el
+    cambio; no hay cambios sin rastro.
+  - 403 → `DENIED`; 400, 404 y 409 → `REJECTED`, registrados aparte. Si ese registro falla, la
+    respuesta no cambia y queda un log de error.
+  - Las ediciones guardan solo los nombres de los campos cambiados.
+  - Limitación: la clave del seudónimo es el `StackId` (no es secreta para quien administra
+    la cuenta). En producción sería una clave de KMS o de Secrets Manager.
 
 ### Pruebas de la fase
 

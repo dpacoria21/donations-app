@@ -1,12 +1,13 @@
-import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import {
   DynamoDBDocumentClient,
   GetCommand,
-  PutCommand,
   QueryCommand,
-  UpdateCommand,
+  TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { z } from 'zod';
+import type { AuditEvent } from '../audit/model.ts';
+import { InMemoryAuditLog } from '../audit/recorder.ts';
 import { PROJECT_STATUSES, type Project, type ProjectStatus } from './model.ts';
 import type { UpdateProjectInput } from './schemas.ts';
 import { SEED_PROJECTS } from './seed.ts';
@@ -15,21 +16,31 @@ import { SEED_PROJECTS } from './seed.ts';
 export type WriteResult<Reason extends string> =
   { ok: true; project: Project } | { ok: false; reason: 'NOT_FOUND' | Reason };
 
-/** Acceso a datos de proyectos. Los handlers no saben si detrás hay memoria o DynamoDB. */
+/**
+ * Acceso a datos de proyectos. Los handlers no saben si detrás hay memoria o DynamoDB.
+ *
+ * Cada escritura recibe su evento de auditoría y lo guarda **en la misma transacción** que el
+ * cambio: o se guardan ambos o ninguno (CA-08.3). No hay cambios sin rastro.
+ */
 export interface ProjectRepository {
   listPublished(): Promise<Project[]>;
   /** Todos los proyectos, también los BORRADOR (solo para el GESTOR). */
   listAll(): Promise<Project[]>;
   findById(projectId: string): Promise<Project | undefined>;
-  create(project: Project): Promise<void>;
+  create(project: Project, audit: AuditEvent): Promise<void>;
   /** Decisión D2: la meta nunca queda por debajo de lo ya recaudado. */
   update(
     projectId: string,
     changes: UpdateProjectInput,
     now: string,
+    audit: AuditEvent,
   ): Promise<WriteResult<'GOAL_BELOW_CONFIRMED'>>;
   /** BORRADOR → PUBLICADO; publicar uno ya publicado se rechaza (CA-08.2). */
-  publish(projectId: string, now: string): Promise<WriteResult<'ALREADY_PUBLISHED'>>;
+  publish(
+    projectId: string,
+    now: string,
+    audit: AuditEvent,
+  ): Promise<WriteResult<'ALREADY_PUBLISHED'>>;
 }
 
 const newestFirst = (a: Project, b: Project) => b.createdAt.localeCompare(a.createdAt);
@@ -37,9 +48,11 @@ const newestFirst = (a: Project, b: Project) => b.createdAt.localeCompare(a.crea
 /** Datos de prueba para el desarrollo local y las pruebas automáticas. */
 export class InMemoryProjectRepository implements ProjectRepository {
   readonly #projects: Map<string, Project>;
+  readonly #auditLog: InMemoryAuditLog;
 
-  constructor(projects: readonly Project[]) {
+  constructor(projects: readonly Project[], auditLog = new InMemoryAuditLog()) {
     this.#projects = new Map(projects.map((project) => [project.projectId, { ...project }]));
+    this.#auditLog = auditLog;
   }
 
   listPublished(): Promise<Project[]> {
@@ -57,42 +70,45 @@ export class InMemoryProjectRepository implements ProjectRepository {
     return Promise.resolve(project && { ...project });
   }
 
-  create(project: Project): Promise<void> {
-    if (this.#projects.has(project.projectId)) {
-      return Promise.reject(new Error('El proyecto ya existe'));
-    }
+  async create(project: Project, audit: AuditEvent): Promise<void> {
+    if (this.#projects.has(project.projectId)) throw new Error('El proyecto ya existe');
     this.#projects.set(project.projectId, { ...project });
-    return Promise.resolve();
+    await this.#auditLog.record(audit);
   }
 
-  update(
+  async update(
     projectId: string,
     changes: UpdateProjectInput,
     now: string,
+    audit: AuditEvent,
   ): Promise<WriteResult<'GOAL_BELOW_CONFIRMED'>> {
     const current = this.#projects.get(projectId);
-    if (!current) return Promise.resolve({ ok: false, reason: 'NOT_FOUND' });
+    if (!current) return { ok: false, reason: 'NOT_FOUND' };
     if (
       changes.goalAmountCents !== undefined &&
       changes.goalAmountCents < current.confirmedAmountCents
     ) {
-      return Promise.resolve({ ok: false, reason: 'GOAL_BELOW_CONFIRMED' });
+      return { ok: false, reason: 'GOAL_BELOW_CONFIRMED' };
     }
     // Zod solo deja en `changes` los campos que llegaron en el cuerpo.
     const updated: Project = { ...current, ...changes, updatedAt: now };
     this.#projects.set(projectId, updated);
-    return Promise.resolve({ ok: true, project: { ...updated } });
+    await this.#auditLog.record(audit);
+    return { ok: true, project: { ...updated } };
   }
 
-  publish(projectId: string, now: string): Promise<WriteResult<'ALREADY_PUBLISHED'>> {
+  async publish(
+    projectId: string,
+    now: string,
+    audit: AuditEvent,
+  ): Promise<WriteResult<'ALREADY_PUBLISHED'>> {
     const current = this.#projects.get(projectId);
-    if (!current) return Promise.resolve({ ok: false, reason: 'NOT_FOUND' });
-    if (current.status !== 'BORRADOR') {
-      return Promise.resolve({ ok: false, reason: 'ALREADY_PUBLISHED' });
-    }
+    if (!current) return { ok: false, reason: 'NOT_FOUND' };
+    if (current.status !== 'BORRADOR') return { ok: false, reason: 'ALREADY_PUBLISHED' };
     const published: Project = { ...current, status: 'PUBLICADO', updatedAt: now };
     this.#projects.set(projectId, published);
-    return Promise.resolve({ ok: true, project: { ...published } });
+    await this.#auditLog.record(audit);
+    return { ok: true, project: { ...published } };
   }
 }
 
@@ -116,13 +132,20 @@ const projectRecordSchema = z.object({
   updatedAt: z.iso.datetime(),
 });
 
+type TransactItem = NonNullable<
+  ConstructorParameters<typeof TransactWriteCommand>[0]['TransactItems']
+>[number];
+
 export class DynamoProjectRepository implements ProjectRepository {
   readonly #client: DynamoDBDocumentClient;
   readonly #tableName: string;
+  /** Solo lo necesitan las funciones que escriben; las de lectura no tienen acceso a esa tabla. */
+  readonly #auditTableName: string | undefined;
 
-  constructor(client: DynamoDBDocumentClient, tableName: string) {
+  constructor(client: DynamoDBDocumentClient, tableName: string, auditTableName?: string) {
     this.#client = client;
     this.#tableName = tableName;
+    this.#auditTableName = auditTableName;
   }
 
   /** Solo `Query` sobre el GSI: el rol de la Lambda de listado no puede hacer `Scan`. */
@@ -139,38 +162,49 @@ export class DynamoProjectRepository implements ProjectRepository {
     return [...drafts, ...published].sort(newestFirst);
   }
 
-  async findById(projectId: string): Promise<Project | undefined> {
+  async findById(projectId: string, consistent = false): Promise<Project | undefined> {
     const { Item } = await this.#client.send(
-      new GetCommand({ TableName: this.#tableName, Key: { projectId } }),
+      new GetCommand({
+        TableName: this.#tableName,
+        Key: { projectId },
+        ConsistentRead: consistent,
+      }),
     );
     return Item ? projectRecordSchema.parse(Item) : undefined;
   }
 
-  async create(project: Project): Promise<void> {
+  async create(project: Project, audit: AuditEvent): Promise<void> {
     await this.#client.send(
-      new PutCommand({
-        TableName: this.#tableName,
-        Item: project,
-        // Un UUID repetido nunca sobrescribe un proyecto existente.
-        ConditionExpression: 'attribute_not_exists(projectId)',
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: this.#tableName,
+              Item: project,
+              // Un UUID repetido nunca sobrescribe un proyecto existente.
+              ConditionExpression: 'attribute_not_exists(projectId)',
+            },
+          },
+          this.#auditItem(audit),
+        ],
       }),
     );
   }
 
   /**
-   * Una sola escritura condicionada: si en el mismo instante una confirmación sube
+   * Una sola transacción: si en el mismo instante una confirmación sube
    * `confirmedAmountCents`, DynamoDB evalúa la condición contra el valor más reciente.
    */
-  async update(
+  update(
     projectId: string,
     changes: UpdateProjectInput,
     now: string,
+    audit: AuditEvent,
   ): Promise<WriteResult<'GOAL_BELOW_CONFIRMED'>> {
-    const fields = Object.entries(changes);
     const names: Record<string, string> = { '#updatedAt': 'updatedAt' };
     const values: Record<string, unknown> = { ':updatedAt': now };
     const assignments = ['#updatedAt = :updatedAt'];
-    for (const [name, value] of fields) {
+    for (const [name, value] of Object.entries(changes)) {
       names[`#${name}`] = name;
       values[`:${name}`] = value;
       assignments.push(`#${name} = :${name}`);
@@ -183,52 +217,85 @@ export class DynamoProjectRepository implements ProjectRepository {
     }
 
     return this.#conditionalUpdate(
-      new UpdateCommand({
-        TableName: this.#tableName,
-        Key: { projectId },
-        UpdateExpression: `SET ${assignments.join(', ')}`,
-        ConditionExpression: condition,
-        ExpressionAttributeNames: names,
-        ExpressionAttributeValues: values,
-        ReturnValues: 'ALL_NEW',
-        ReturnValuesOnConditionCheckFailure: 'ALL_OLD',
-      }),
+      projectId,
+      {
+        Update: {
+          TableName: this.#tableName,
+          Key: { projectId },
+          UpdateExpression: `SET ${assignments.join(', ')}`,
+          ConditionExpression: condition,
+          ExpressionAttributeNames: names,
+          ExpressionAttributeValues: values,
+          ReturnValuesOnConditionCheckFailure: 'ALL_OLD',
+        },
+      },
+      audit,
       'GOAL_BELOW_CONFIRMED',
     );
   }
 
-  publish(projectId: string, now: string): Promise<WriteResult<'ALREADY_PUBLISHED'>> {
+  publish(
+    projectId: string,
+    now: string,
+    audit: AuditEvent,
+  ): Promise<WriteResult<'ALREADY_PUBLISHED'>> {
     return this.#conditionalUpdate(
-      new UpdateCommand({
-        TableName: this.#tableName,
-        Key: { projectId },
-        UpdateExpression: 'SET #status = :published, #updatedAt = :now',
-        ConditionExpression: 'attribute_exists(projectId) AND #status = :draft',
-        ExpressionAttributeNames: { '#status': 'status', '#updatedAt': 'updatedAt' },
-        ExpressionAttributeValues: {
-          ':published': 'PUBLICADO' satisfies ProjectStatus,
-          ':draft': 'BORRADOR' satisfies ProjectStatus,
-          ':now': now,
+      projectId,
+      {
+        Update: {
+          TableName: this.#tableName,
+          Key: { projectId },
+          UpdateExpression: 'SET #status = :published, #updatedAt = :now',
+          ConditionExpression: 'attribute_exists(projectId) AND #status = :draft',
+          ExpressionAttributeNames: { '#status': 'status', '#updatedAt': 'updatedAt' },
+          ExpressionAttributeValues: {
+            ':published': 'PUBLICADO' satisfies ProjectStatus,
+            ':draft': 'BORRADOR' satisfies ProjectStatus,
+            ':now': now,
+          },
+          ReturnValuesOnConditionCheckFailure: 'ALL_OLD',
         },
-        ReturnValues: 'ALL_NEW',
-        ReturnValuesOnConditionCheckFailure: 'ALL_OLD',
-      }),
+      },
+      audit,
       'ALREADY_PUBLISHED',
     );
   }
 
-  /** Si la condición falla, `ALL_OLD` distingue «no existe» (sin Item) del otro motivo. */
+  #auditItem(audit: AuditEvent): TransactItem {
+    if (!this.#auditTableName) throw new Error('Falta la variable de entorno AUDIT_EVENTS_TABLE');
+    return {
+      Put: {
+        TableName: this.#auditTableName,
+        Item: audit,
+        ConditionExpression: 'attribute_not_exists(eventType)',
+      },
+    };
+  }
+
+  /**
+   * Cambio + evento en una transacción. Si se cancela por la condición del proyecto, `ALL_OLD`
+   * distingue «no existe» (sin Item) del otro motivo. Las transacciones no devuelven el ítem
+   * nuevo, así que se lee con `ConsistentRead` justo después.
+   */
   async #conditionalUpdate<Reason extends string>(
-    command: UpdateCommand,
+    projectId: string,
+    update: TransactItem,
+    audit: AuditEvent,
     reason: Reason,
   ): Promise<WriteResult<Reason>> {
     try {
-      const { Attributes } = await this.#client.send(command);
-      return { ok: true, project: projectRecordSchema.parse(Attributes) };
+      await this.#client.send(
+        new TransactWriteCommand({ TransactItems: [update, this.#auditItem(audit)] }),
+      );
     } catch (error) {
-      if (!(error instanceof ConditionalCheckFailedException)) throw error;
-      return { ok: false, reason: error.Item ? reason : 'NOT_FOUND' };
+      const projectCheck =
+        error instanceof TransactionCanceledException ? error.CancellationReasons?.[0] : undefined;
+      if (projectCheck?.Code !== 'ConditionalCheckFailed') throw error;
+      return { ok: false, reason: projectCheck.Item ? reason : 'NOT_FOUND' };
     }
+    const project = await this.findById(projectId, true);
+    if (!project) throw new Error('El proyecto no se encontró después de actualizarlo');
+    return { ok: true, project };
   }
 
   async #queryByStatus(status: ProjectStatus): Promise<Project[]> {
@@ -264,6 +331,7 @@ export function createProjectRepository(env: NodeJS.ProcessEnv = process.env): P
     return new DynamoProjectRepository(
       DynamoDBDocumentClient.from(new DynamoDBClient()),
       tableName,
+      env.AUDIT_EVENTS_TABLE?.trim() || undefined,
     );
   }
   if (env.AWS_LAMBDA_FUNCTION_NAME) {

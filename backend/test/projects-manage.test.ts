@@ -1,60 +1,18 @@
-import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import {
-  DynamoDBDocumentClient,
-  PutCommand,
-  QueryCommand,
-  UpdateCommand,
-} from '@aws-sdk/lib-dynamodb';
-import type { APIGatewayProxyEventV2WithJWTAuthorizer } from 'aws-lambda';
-import { mockClient } from 'aws-sdk-client-mock';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { createProjectHandlers } from '../src/projects/handlers.ts';
+import { describe, expect, it } from 'vitest';
 import type { Project } from '../src/projects/model.ts';
-import { DynamoProjectRepository, InMemoryProjectRepository } from '../src/projects/repository.ts';
-import { SEED_PROJECTS } from '../src/projects/seed.ts';
-import type { HttpResult } from '../src/shared/http.ts';
-import { donorClaims, jwtEvent } from './helpers/events.ts';
-
-const NEW_ID = '5b0e6a3c-1d2f-4e8a-9b7c-0a1b2c3d4e5f';
-const DRAFT_ID = 'e8d4b6a2-5c3f-4e19-b7a0-9f1c2d3e4b58';
-const PUBLISHED_ID = '7a91d0c4-2e5f-4b38-a6c7-1d9e8f2b4a63'; // 612 550 céntimos recaudados
-const MISSING_ID = '00000000-0000-4000-8000-000000000000';
-const NOW = '2026-11-12T15:00:00.000Z';
-
-const managerClaims = (overrides: Record<string, string> = {}) =>
-  donorClaims({
-    sub: 'a7c1e2f3-0000-4000-8000-0000000000aa',
-    'cognito:groups': '[GESTOR]',
-    scope: 'openid email api/projects.write',
-    ...overrides,
-  });
-
-function setup() {
-  const repository = new InMemoryProjectRepository(SEED_PROJECTS);
-  const handlers = createProjectHandlers(repository, { now: () => NOW, newId: () => NEW_ID });
-  return { repository, handlers };
-}
-
-function request(
-  claims: Record<string, string>,
-  options: { body?: unknown; rawBody?: string; projectId?: string } = {},
-): APIGatewayProxyEventV2WithJWTAuthorizer {
-  const event = jwtEvent(claims);
-  return {
-    ...event,
-    body:
-      options.rawBody ?? (options.body === undefined ? undefined : JSON.stringify(options.body)),
-    pathParameters: options.projectId ? { projectId: options.projectId } : undefined,
-  };
-}
-
-const body = (result: HttpResult) => JSON.parse(result.body ?? 'null') as Record<string, unknown>;
-
-const VALID = {
-  title: 'Talleres de lectura en Socabaya',
-  description: 'Materiales y facilitadores para talleres de lectura infantil.',
-  goalAmountCents: 450_000,
-};
+import { donorClaims } from './helpers/events.ts';
+import {
+  DRAFT_ID,
+  jsonBody as body,
+  managedRequest as request,
+  managerClaims,
+  MISSING_ID,
+  NEW_ID,
+  NOW,
+  PUBLISHED_ID,
+  setupProjects as setup,
+  VALID_PROJECT as VALID,
+} from './helpers/projects.ts';
 
 describe('autorización de las rutas de gestión (HU-04, HU-08)', () => {
   it('T03: un DONANTE no puede crear proyectos → 403 (CA-04.1)', async () => {
@@ -244,84 +202,5 @@ describe('GET /v1/manage/projects', () => {
       request(donorClaims({ scope: 'api/projects.write' })),
     );
     expect(result.statusCode).toBe(403);
-  });
-});
-
-describe('DynamoProjectRepository: escrituras condicionadas', () => {
-  const ddb = mockClient(DynamoDBDocumentClient);
-  const repository = new DynamoProjectRepository(
-    DynamoDBDocumentClient.from(new DynamoDBClient({ region: 'us-east-2' })),
-    'ProjectsTable-test',
-  );
-  const stored = SEED_PROJECTS[1];
-  const conditionFailed = (item?: Record<string, unknown>) =>
-    new ConditionalCheckFailedException({
-      message: 'The conditional request failed',
-      $metadata: {},
-      ...(item ? { Item: item as never } : {}),
-    });
-
-  beforeEach(() => {
-    ddb.reset();
-  });
-
-  it('crear no sobrescribe un proyecto existente', async () => {
-    ddb.on(PutCommand).resolves({});
-    await repository.create({ ...(stored as Project), projectId: NEW_ID });
-    expect(ddb.commandCalls(PutCommand)[0]?.args[0].input.ConditionExpression).toBe(
-      'attribute_not_exists(projectId)',
-    );
-  });
-
-  it('editar la meta exige en la misma escritura que no baje de lo recaudado', async () => {
-    ddb.on(UpdateCommand).resolves({ Attributes: { ...stored, goalAmountCents: 900_000 } });
-
-    const result = await repository.update(PUBLISHED_ID, { goalAmountCents: 900_000 }, NOW);
-
-    expect(result.ok).toBe(true);
-    const input = ddb.commandCalls(UpdateCommand)[0]?.args[0].input;
-    expect(input?.ConditionExpression).toBe(
-      'attribute_exists(projectId) AND #confirmed <= :goalAmountCents',
-    );
-    expect(input?.UpdateExpression).toBe(
-      'SET #updatedAt = :updatedAt, #goalAmountCents = :goalAmountCents',
-    );
-    expect(input?.UpdateExpression).not.toContain('confirmedAmountCents');
-  });
-
-  it('si la condición falla y el proyecto existe → GOAL_BELOW_CONFIRMED', async () => {
-    ddb.on(UpdateCommand).rejects(conditionFailed({ projectId: { S: PUBLISHED_ID } }));
-    await expect(repository.update(PUBLISHED_ID, { goalAmountCents: 1 }, NOW)).resolves.toEqual({
-      ok: false,
-      reason: 'GOAL_BELOW_CONFIRMED',
-    });
-  });
-
-  it('si la condición falla y el proyecto no existe → NOT_FOUND', async () => {
-    ddb.on(UpdateCommand).rejects(conditionFailed());
-    await expect(repository.publish(MISSING_ID, NOW)).resolves.toEqual({
-      ok: false,
-      reason: 'NOT_FOUND',
-    });
-  });
-
-  it('publicar solo cambia BORRADOR → PUBLICADO', async () => {
-    ddb.on(UpdateCommand).rejects(conditionFailed({ projectId: { S: PUBLISHED_ID } }));
-    await expect(repository.publish(PUBLISHED_ID, NOW)).resolves.toEqual({
-      ok: false,
-      reason: 'ALREADY_PUBLISHED',
-    });
-    expect(ddb.commandCalls(UpdateCommand)[0]?.args[0].input.ConditionExpression).toBe(
-      'attribute_exists(projectId) AND #status = :draft',
-    );
-  });
-
-  it('listar todo consulta el GSI por estado, sin Scan', async () => {
-    ddb.on(QueryCommand).resolves({ Items: [] });
-    await repository.listAll();
-    const statuses = ddb
-      .commandCalls(QueryCommand)
-      .map((call) => call.args[0].input.ExpressionAttributeValues?.[':status'] as unknown);
-    expect(statuses.sort()).toEqual(['BORRADOR', 'PUBLICADO']);
   });
 });
