@@ -57,7 +57,8 @@ function ManagedProjects({ user, notice }: { user: SessionUser; notice?: string 
         </Link>
       </div>
 
-      {notice && (
+      {/* El aviso del formulario se reemplaza por el resultado de la siguiente acción. */}
+      {notice && publish.isIdle && (
         <p role="status" className="mt-4 rounded bg-emerald-50 px-3 py-2 text-emerald-900">
           {notice}
         </p>

@@ -26,7 +26,7 @@ requirements.md §7.
 | 0    | Cuenta AWS, repositorio y documentos     | Completa¹ |
 | 1    | Esqueletos (backend y frontend) y CI     | Completa  |
 | 2    | Infraestructura base y autenticación     | Pendiente |
-| 3    | Proyectos y catálogo                     | En curso  |
+| 3    | Proyectos y catálogo                     | Completa  |
 | 4    | Donaciones e idempotencia                | Pendiente |
 | 5    | Simulación, concurrencia, MFA y frontend | Pendiente |
 | 6    | Endurecimiento y evidencias              | Pendiente |
@@ -242,8 +242,13 @@ Parte 2 de la fase: definido en `infra/template.yaml` y probado en
       (`Query`, `PutItem` o `UpdateItem`). Una prueba verifica que ninguna función de una ruta
       pública puede escribir (T10).
 - [x] La vista pública incluye `updatedAt` para mostrar «Última actualización» (D2).
-- [ ] Desplegar (`npm run build` y `sam deploy`) y ejecutar la carpeta «Proyectos (gestión)» de
-      Postman con usuarios GESTOR y DONANTE.
+- [x] Desplegado (2026-11-12) y probado desde la SPA contra el stage con `gestor1` y `donante1`:
+      validaciones, crear (meta S/ 3 000,50 → 300 050 céntimos), editar solo el título, meta menor
+      que lo recaudado → 409 sin cambiar el proyecto, publicar y verlo en el catálogo.
+- [x] Auditoría verificada en `AuditEvents`: `PROJECT_CREATE`, `PROJECT_UPDATE` (con
+      `changedFields: title`) y `PROJECT_PUBLISH` como SUCCESS, el 409 como REJECTED y el intento
+      del donante como DENIED, todos con actor seudonimizado y `requestId`.
+- [ ] Ejecutar la carpeta «Proyectos (gestión)» de Postman y guardar el reporte en `evidence/`.
 - [x] Módulo `audit` (parte 2 de la fase): cada creación, edición o publicación registra un
       `AuditEvent` con actor seudonimizado (HMAC del `sub`), rol, fecha, `requestId`, acción,
       recurso y resultado, sin tokens, montos ni textos (CA-08.3, CA-10.2):
@@ -261,7 +266,9 @@ Parte 2 de la fase: definido en `infra/template.yaml` y probado en
 - [x] T01 contra el stage desplegado: solo devuelve los proyectos PUBLICADO (fase 2).
 - [x] T03 automatizada: un DONANTE (incluso con el scope) intenta crear, editar o publicar → 403,
       en el handler y a través del servidor local (CA-04.1).
-- [ ] T03 contra el stage desplegado con Postman.
+- [x] T03 contra el stage desplegado (desde la SPA con `donante1`): 403 de la Lambda (el token
+      tenía el scope, no el grupo), evento DENIED en la auditoría y ningún proyecto creado.
+- [x] T12 desde la SPA: «Mi cuenta» de un GESTOR recibe 403 al pedir `/v1/donations/me`.
 
 ### Frontend
 
@@ -279,7 +286,8 @@ stage desplegado (móvil y escritorio).
       `aria-invalid` en los campos con error (CA-NF06.2).
 - [x] Los errores 403 y 409 del API se muestran tal cual: la interfaz no decide permisos.
 - [x] Las páginas del GESTOR se cargan bajo demanda (el bundle principal pasó de 501 a 375 KB).
-- [ ] Desplegar el backend de la fase 3 y probar la gestión con un usuario GESTOR real.
+- [x] Gestión probada con un usuario GESTOR real contra el stage desplegado. Corregido tras la
+      prueba: el aviso del formulario ya no se acumula con el de publicar.
 
 ## Fase 4 — Donaciones e idempotencia (día 4)
 
@@ -406,22 +414,22 @@ stage desplegado (móvil y escritorio).
 
 ## Matriz de pruebas T01–T14
 
-| ID  | Escenario                                 | Esperado                           | Fase | Automática      | Evidencia AWS |
-| --- | ----------------------------------------- | ---------------------------------- | ---- | --------------- | ------------- |
-| T01 | Visitante consulta proyectos              | 200, sin borradores                | 3    | ✅ (en memoria) | ⬜            |
-| T02 | Sin token intenta donar                   | 401                                | 2    | ⬜              | ⬜            |
-| T03 | Donante intenta crear proyecto            | 403                                | 3    | ⬜              | ⬜            |
-| T04 | Donante envía 0, 100001 o valor no entero | 400                                | 4    | ⬜              | ⬜            |
-| T05 | Donante crea intención válida             | 201, pendiente, sin cargo          | 4    | ⬜              | ⬜            |
-| T06 | Repite clave y payload idénticos          | Mismo resultado, una sola donación | 4    | ⬜              | ⬜            |
-| T07 | Repite clave con payload distinto         | 409                                | 4    | ⬜              | ⬜            |
-| T08 | 10 confirmaciones concurrentes            | Un solo incremento                 | 5    | ⬜              | ⬜            |
-| T09 | Donante consulta donación ajena           | 403/404 sin filtración             | 4    | ⬜              | ⬜            |
-| T10 | Lambda de listado intenta escribir        | `AccessDenied` y error controlado  | 6    | —               | ⬜            |
-| T11 | ID token o token alterado como Bearer     | 401                                | 2    | —               | ⬜            |
-| T12 | Gestor consulta historial de un donante   | 403/404                            | 4    | ⬜              | ⬜            |
-| T13 | Token revocado usado antes de expirar     | Aceptado hasta expirar; luego 401  | 5    | —               | ⬜            |
-| T14 | GESTOR inicia sesión sin segundo factor   | No obtiene tokens                  | 5    | —               | ⬜            |
+| ID  | Escenario                                 | Esperado                           | Fase | Automática | Evidencia AWS |
+| --- | ----------------------------------------- | ---------------------------------- | ---- | ---------- | ------------- |
+| T01 | Visitante consulta proyectos              | 200, sin borradores                | 3    | ✅         | ✅            |
+| T02 | Sin token intenta donar                   | 401                                | 2    | ✅         | ✅            |
+| T03 | Donante intenta crear proyecto            | 403                                | 3    | ✅         | ✅            |
+| T04 | Donante envía 0, 100001 o valor no entero | 400                                | 4    | ⬜         | ⬜            |
+| T05 | Donante crea intención válida             | 201, pendiente, sin cargo          | 4    | ⬜         | ⬜            |
+| T06 | Repite clave y payload idénticos          | Mismo resultado, una sola donación | 4    | ⬜         | ⬜            |
+| T07 | Repite clave con payload distinto         | 409                                | 4    | ⬜         | ⬜            |
+| T08 | 10 confirmaciones concurrentes            | Un solo incremento                 | 5    | ⬜         | ⬜            |
+| T09 | Donante consulta donación ajena           | 403/404 sin filtración             | 4    | ⬜         | ⬜            |
+| T10 | Lambda de listado intenta escribir        | `AccessDenied` y error controlado  | 6    | —          | ⬜            |
+| T11 | ID token o token alterado como Bearer     | 401                                | 2    | —          | ⬜            |
+| T12 | Gestor consulta historial de un donante   | 403/404                            | 4    | ✅         | ✅            |
+| T13 | Token revocado usado antes de expirar     | Aceptado hasta expirar; luego 401  | 5    | —          | ⬜            |
+| T14 | GESTOR inicia sesión sin segundo factor   | No obtiene tokens                  | 5    | —          | ⬜            |
 
 «—» indica que la prueba depende de API Gateway, IAM o Cognito y solo se puede demostrar contra
 AWS.

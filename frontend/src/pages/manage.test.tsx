@@ -66,6 +66,29 @@ describe('panel de gestión (HU-08)', () => {
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true);
   });
 
+  it('el aviso del formulario desaparece al publicar: no se acumulan mensajes', async () => {
+    mockApi({
+      'GET /v1/manage/projects': managedList,
+      [`PATCH /v1/projects/${DRAFT.projectId}/publish`]: () =>
+        Response.json({ ...DRAFT, status: 'PUBLICADO' }),
+    });
+    renderWithProviders(
+      <Routes>
+        <Route path="/gestion" element={<ManagePage />} />
+      </Routes>,
+      {
+        route: { pathname: '/gestion', state: { notice: 'Se creó el borrador «X».' } },
+        auth: signedInManager(),
+      },
+    );
+    expect(screen.getByText('Se creó el borrador «X».')).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: `Publicar «${DRAFT.title}»` }));
+
+    expect(await screen.findByText(/ya está publicado en el catálogo/)).toBeInTheDocument();
+    expect(screen.queryByText('Se creó el borrador «X».')).not.toBeInTheDocument();
+  });
+
   it('muestra el 409 del API si el proyecto ya estaba publicado (CA-08.2)', async () => {
     mockApi({
       'GET /v1/manage/projects': managedList,

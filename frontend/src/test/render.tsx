@@ -28,7 +28,10 @@ export function fakeAuth(overrides: Partial<AuthContextValue> = {}): AuthContext
 
 export function renderWithProviders(
   ui: ReactElement,
-  options: { route?: string; auth?: AuthContextValue } = {},
+  options: {
+    route?: string | { pathname: string; state?: unknown };
+    auth?: AuthContextValue;
+  } = {},
 ) {
   const auth = options.auth ?? fakeAuth();
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
