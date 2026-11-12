@@ -208,7 +208,10 @@ ni se piden datos de pago (CA-05.5). Exige la cabecera `Idempotency-Key` (UUID):
    evento de auditoría y comprueba que el proyecto siga PUBLICADO. De varias solicitudes
    simultáneas con la misma clave, solo una crea la donación y las demás repiten su respuesta.
 
-Los registros de idempotencia caducan a las 24 h (TTL `expiresAt`).
+Los registros de idempotencia caducan a las 24 h (TTL `expiresAt`). Como el TTL de DynamoDB
+puede tardar en borrarlos, un registro vencido se trata como inexistente al leerlo, y la
+condición de escritura es `attribute_not_exists(pk) OR expiresAt <= :now`: pasadas las 24 h,
+la misma clave cuenta como nueva (observación de la revisión de Codex en el PR de la fase 4).
 
 ## Simulación de pagos (solo stage `academic`)
 

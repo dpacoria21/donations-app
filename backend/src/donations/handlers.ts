@@ -13,7 +13,7 @@ import { parseJsonBody } from '../shared/body.ts';
 import { badRequest, conflict, notFound } from '../shared/errors.ts';
 import { json, withHttp, type HttpResult } from '../shared/http.ts';
 import { toDonorDonation, type Donation } from './model.ts';
-import { getDonationRepository, type DonationRepository } from './repository.ts';
+import { epochSeconds, getDonationRepository, type DonationRepository } from './repository.ts';
 import {
   createDonationSchema,
   donationIdSchema,
@@ -70,10 +70,14 @@ export function createDonationHandlers(
 
   /**
    * Si la clave ya se usó: con el mismo cuerpo devuelve la respuesta original (sin crear otra
-   * donación); con otro cuerpo, 409 (CA-05.4). `null` si la clave es nueva.
+   * donación); con otro cuerpo, 409 (CA-05.4). `null` si la clave es nueva o ya venció.
    */
-  async function replayIfKnown(pk: string, hash: string): Promise<HttpResult | null> {
-    const record = await repository.findIdempotency(pk);
+  async function replayIfKnown(
+    pk: string,
+    hash: string,
+    nowEpochSeconds: number,
+  ): Promise<HttpResult | null> {
+    const record = await repository.findIdempotency(pk, nowEpochSeconds);
     if (!record) return null;
     if (record.payloadHash !== hash) {
       throw conflict('La clave Idempotency-Key ya se usó con otros datos');
@@ -107,9 +111,11 @@ export function createDonationHandlers(
           const input = parseJsonBody(event, createDonationSchema);
           const hash = payloadHash(input);
           const pk = idempotencyPk(identity.sub, key.data);
+          const timestamp = now();
+          const nowSeconds = epochSeconds(timestamp);
 
           // 1. ¿Es un reintento? Se responde igual que la primera vez, sin crear nada.
-          const replay = await replayIfKnown(pk, hash);
+          const replay = await replayIfKnown(pk, hash, nowSeconds);
           if (replay) return replay;
 
           // 2. El proyecto debe existir y estar PUBLICADO (CA-05.2). Ningún error toca el acumulado.
@@ -120,7 +126,6 @@ export function createDonationHandlers(
           }
 
           // 3. Clave + donación + comprobación del proyecto + auditoría, en una transacción.
-          const timestamp = now();
           const donation: Donation = {
             donationId: newId(),
             projectId: input.projectId,
@@ -138,7 +143,7 @@ export function createDonationHandlers(
               payloadHash: hash,
               donationId: donation.donationId,
               responseStatus: 201,
-              expiresAt: Math.floor(Date.parse(timestamp) / 1000) + IDEMPOTENCY_TTL_SECONDS,
+              expiresAt: nowSeconds + IDEMPOTENCY_TTL_SECONDS,
               createdAt: timestamp,
             },
             // Sin montos ni datos del donante: solo el recurso (CA-10.2).
@@ -147,7 +152,7 @@ export function createDonationHandlers(
 
           if (result === 'KEY_IN_USE') {
             // Otra solicitud con la misma clave ganó la carrera: se repite su respuesta.
-            const winner = await replayIfKnown(pk, hash);
+            const winner = await replayIfKnown(pk, hash, nowSeconds);
             if (winner) return winner;
             throw conflict('La clave Idempotency-Key ya está en uso');
           }
