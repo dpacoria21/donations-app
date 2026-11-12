@@ -37,29 +37,38 @@ requirements.md §7.
 
 ## Fase 0 — Cuenta AWS, repositorio y documentos (día 1)
 
-Los pasos sobre la cuenta y GitHub los hace una persona del equipo, siguiendo
-[docs/cuenta-aws.md](docs/cuenta-aws.md). Un asistente de IA no los ejecuta (design.md §10).
+Guía de los pasos manuales: [docs/cuenta-aws.md](docs/cuenta-aws.md). El 2026-11-12 un
+asistente de IA ejecutó las verificaciones y creó el presupuesto desde la consola y CloudShell,
+con la sesión del propietario y bajo su supervisión (design.md §10; ver `AI_USAGE.md`).
 
-- [ ] Iniciar sesión con credenciales temporales (`aws login --profile donations-dev`) y
-      comprobar con `aws sts get-caller-identity` que no es `root` (CA-NF03.3).
-- [ ] Confirmar la Región seleccionada en AWS Settings → View all projects → Overview →
-      Additional Info → Region. Hoy figura `us-east-2`; todos los recursos regionales van allí
-      (CA-NF09.1).
-- [ ] Comprobar el plan con `aws freetier get-account-plan-state` y que cada servicio del
-      diseño esté en la lista del plan: Lambda, API Gateway, DynamoDB, Cognito, S3,
-      CloudFront, CloudWatch, CloudFormation/SAM, IAM, CloudTrail, Budgets y Verified
-      Permissions (CA-NF09.1).
-- [ ] Crear una alerta en AWS Budgets (CA-NF09.1).
-- [ ] Acceso del equipo: nadie trabaja con root; cada integrante tiene MFA y ninguna llave de
-      acceso de larga duración (CA-NF03.3). Ver la decisión D3.
+- [x] Identidad de trabajo sin `root`: CloudShell muestra el rol asumido
+      `AccountFullAccessRole` (CA-NF03.3).
+- [x] Región `us-east-2` confirmada en AWS Settings → Projects → Additional info (CA-NF09.1).
+- [x] Plan **Free** confirmado en AWS Settings → Billing: 119.93 USD de crédito, 176 días
+      restantes (hasta el 2027-05-05) y 0.07 USD consumidos en noviembre (CA-NF09.1).
+- [ ] Revisar en la [lista oficial](https://docs.aws.amazon.com/accounts/latest/reference/supported-services-sign-up-new.html)
+      que estén Lambda, API Gateway, DynamoDB, Cognito, S3, CloudFront, CloudWatch,
+      CloudFormation/SAM, IAM, CloudTrail, Budgets y Verified Permissions (CA-NF09.1).
+- [x] Alerta de AWS Budgets `alerta-mensual-5usd`: 5 USD al mes sin restar créditos; avisa por
+      correo al superar el 80% del gasto real y el 100% del previsto (CA-NF09.1).
+- [ ] Acceso del equipo: hoy el único _team member_ es el propietario. Falta invitar al resto,
+      confirmar que el inicio de sesión de cada uno usa MFA y que no hay llaves de acceso de
+      larga duración (CA-NF03.3). Ver la decisión D3.
 - [ ] Repositorio en GitHub con `main` protegida y PR con al menos una revisión de otro
       integrante (design.md §8).
 - [ ] Activar el secret scanning (con _push protection_) y las alertas de Dependabot en
       GitHub (design.md §6.2).
-- [ ] Instalar AWS SAM CLI (`sam --version`); lo necesita la fase 2 para validar y desplegar.
-- [ ] Inventariar los recursos que ya existen en la cuenta (pilas, user pools, Lambdas, tablas,
-      buckets, CloudFront) y los que cobran por existir (EC2, NAT Gateway, IP elásticas). Se
-      sabe que queda el user pool de la demo Java `us-east-2_yAC3TdllN`; se borra en la fase 8.
+- [x] AWS SAM CLI 1.172.1 instalado con `winget` (`sam --version`); lo necesita la fase 2.
+      Abrir una terminal nueva para que el `PATH` lo reconozca.
+- [x] Inventario de la cuenta (2026-11-12, `us-east-2`):
+  - No hay EC2, NAT Gateway, IP elásticas, RDS, CloudFront ni API Gateway: nada cobra solo
+    por existir.
+  - User pool de la demo Java `us-east-2_yAC3TdllN`: no sirve para este diseño; se borra en la
+    fase 8 o antes, cuando el pool nuevo funcione.
+  - App de Amplify **notesapp** (otro proyecto) con sus pilas, el user pool
+    `us-east-2_KjxacecaQ`, una tabla `Todo-*`, Lambdas auxiliares, dos buckets y log groups
+    sin retención. No pertenece a este proyecto: su dueño decide si se borra.
+  - Pila `CDKToolkit` y su bucket `cdk-*-assets-*`, de un _bootstrap_ de CDK. SAM no la usa.
 - [x] `.gitignore` que excluye `node_modules`, `dist`, `.aws-sam`, `.env*` y `.local/`
       (CA-NF01.2).
 - [x] `docs/threat-model.md`: STRIDE por límite de confianza, mapeo a NIST SP 800-207 y a
