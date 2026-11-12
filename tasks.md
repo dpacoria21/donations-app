@@ -265,11 +265,21 @@ Parte 2 de la fase: definido en `infra/template.yaml` y probado en
 
 ### Frontend
 
-- [ ] Catálogo con nombre, finalidad, meta y suma confirmada en formato PEN, y un estado vacío
-      comprensible (HU-01, CA-09.1).
-- [ ] Detalle con identificador, descripción, objetivo, estado y monto acumulado, y una página
-      404 (HU-02).
-- [ ] Pantallas del GESTOR para crear y publicar proyectos (HU-08).
+Parte 3 de la fase: probado con 57 pruebas de interfaz y revisado en el navegador contra el
+stage desplegado (móvil y escritorio).
+
+- [x] Catálogo con nombre, finalidad, meta y suma confirmada en formato PEN, barra de avance
+      accesible y un estado vacío comprensible (HU-01, CA-09.1, CA-01.3).
+- [x] Detalle con identificador, descripción, estado, avance confirmado y «Última
+      actualización», y una página 404 para proyectos inexistentes o en borrador (HU-02).
+- [x] Pantallas del GESTOR (`/gestion`) para listar, crear, editar y publicar proyectos, con
+      React Hook Form + Zod. La meta se escribe en soles y se envía en céntimos enteros sin pasar
+      por `float`; una edición envía solo los campos cambiados (HU-08, D2).
+- [x] Formularios accesibles: etiquetas, ayudas y errores asociados con `aria-describedby`, y
+      `aria-invalid` en los campos con error (CA-NF06.2).
+- [x] Los errores 403 y 409 del API se muestran tal cual: la interfaz no decide permisos.
+- [x] Las páginas del GESTOR se cargan bajo demanda (el bundle principal pasó de 501 a 375 KB).
+- [ ] Desplegar el backend de la fase 3 y probar la gestión con un usuario GESTOR real.
 
 ## Fase 4 — Donaciones e idempotencia (día 4)
 
