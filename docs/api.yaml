@@ -358,6 +358,52 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
+  /v1/donations/{donationId}/simulate:
+    parameters:
+      - $ref: "#/components/parameters/DonationId"
+    post:
+      tags: [Donaciones]
+      operationId: simulateDonation
+      summary: Simular la confirmación o el rechazo de una donación propia
+      description: |
+        **Solo existe en el stage `academic`** (CA-06.1): en otro stage la plantilla no crea la
+        ruta. Solo DONANTE y solo la propia (una ajena responde 404).
+
+        Una transacción cambia la donación únicamente si sigue `PENDIENTE_SIMULACION` y es del
+        `sub` del token; si se confirma, suma el monto al proyecto en la misma escritura. Una
+        segunda simulación, aunque llegue en paralelo, responde 409 y no vuelve a sumar
+        (CA-06.2, T08). Un rechazo no modifica el acumulado (CA-06.3). No hay ningún cobro.
+      security:
+        - cognito: [api/donations.write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimulateDonationRequest"
+            example:
+              outcome: CONFIRMADA_SIMULADA
+      responses:
+        "200":
+          description: Donación con su nuevo estado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DonorDonation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/DonationNotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /v1/donations/me:
     get:
       tags: [Donaciones]
@@ -676,6 +722,14 @@ components:
           minimum: 100
           maximum: 100000
           description: De S/ 1.00 a S/ 1 000.00, en céntimos enteros (CA-05.1).
+    SimulateDonationRequest:
+      type: object
+      additionalProperties: false
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [CONFIRMADA_SIMULADA, RECHAZADA_SIMULADA]
     DonationStatus:
       type: string
       enum: [PENDIENTE_SIMULACION, CONFIRMADA_SIMULADA, RECHAZADA_SIMULADA]

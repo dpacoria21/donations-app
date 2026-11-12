@@ -11,7 +11,12 @@ import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { APIGatewayProxyEventV2, APIGatewayProxyEventV2WithJWTAuthorizer } from 'aws-lambda';
 import { SCOPES } from '../src/authz/identity.ts';
-import { createDonation, getDonation, getMyDonations } from '../src/donations/handlers.ts';
+import {
+  createDonation,
+  getDonation,
+  getMyDonations,
+  simulateDonation,
+} from '../src/donations/handlers.ts';
 import {
   createProject,
   getProject,
@@ -114,6 +119,13 @@ export const ROUTES: readonly Route[] = [
     pattern: /^\/v1\/donations\/(?<donationId>[^/]+)$/,
     auth: { scopes: [SCOPES.donationsRead] },
     handler: getDonation,
+  },
+  {
+    method: 'POST',
+    routeKey: 'POST /v1/donations/{donationId}/simulate',
+    pattern: /^\/v1\/donations\/(?<donationId>[^/]+)\/simulate$/,
+    auth: { scopes: [SCOPES.donationsWrite] },
+    handler: simulateDonation,
   },
   {
     method: 'POST',

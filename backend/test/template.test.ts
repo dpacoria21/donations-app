@@ -12,11 +12,13 @@ import * as projectHandlers from '../src/projects/handlers.ts';
 
 interface Resource {
   Type: string;
+  Condition?: string;
   DeletionPolicy?: string;
   Properties: Record<string, unknown>;
 }
 
 interface Template {
+  Conditions?: Record<string, unknown>;
   Parameters: Record<string, { Default?: unknown; AllowedValues?: unknown[] }>;
   Globals: { Function: Record<string, unknown> };
   Resources: Record<string, Resource>;
@@ -173,6 +175,14 @@ describe('infra/template.yaml: funciones Lambda', () => {
         access: { DonationsTable: ['dynamodb:GetItem'] },
         env: { DONATIONS_TABLE: { Ref: 'DonationsTable' } },
       },
+      SimulateDonationFunction: {
+        access: {
+          DonationsTable: ['dynamodb:GetItem', 'dynamodb:UpdateItem'],
+          ProjectsTable: ['dynamodb:UpdateItem'],
+          AuditEventsTable: ['dynamodb:PutItem'],
+        },
+        env: { DONATIONS_TABLE: { Ref: 'DonationsTable' }, ...PROJECTS, ...AUDIT },
+      },
       CreateDonationFunction: {
         access: {
           IdempotencyTable: ['dynamodb:GetItem', 'dynamodb:PutItem'],
@@ -262,7 +272,7 @@ describe('infra/template.yaml: HTTP API', () => {
 
   it('usa el stage academic con throttling (design.md §6.2)', () => {
     expect(api.StageName).toEqual({ Ref: 'StageName' });
-    expect(template.Parameters.StageName?.AllowedValues).toEqual(['academic']);
+    expect(template.Parameters.StageName?.AllowedValues).toEqual(['academic', 'prod']);
     expect(api.DefaultRouteSettings).toMatchObject({
       ThrottlingBurstLimit: expect.any(Number) as number,
       ThrottlingRateLimit: expect.any(Number) as number,
@@ -375,5 +385,28 @@ describe('infra/template.yaml: funciones públicas de solo lectura (T10)', () =>
         name,
       ).toEqual([]);
     }
+  });
+});
+
+describe('infra/template.yaml: simulación solo en el stage academic (CA-06.1)', () => {
+  it('la condición compara el stage con academic', () => {
+    expect(template.Conditions?.IsAcademicStage).toEqual({
+      'Fn::Equals': [{ Ref: 'StageName' }, 'academic'],
+    });
+  });
+
+  it('la función, su rol y su log group dependen de esa condición', () => {
+    for (const name of [
+      'SimulateDonationFunction',
+      'SimulateDonationRole',
+      'SimulateDonationLogGroup',
+    ]) {
+      expect(resource(name).Condition, name).toBe('IsAcademicStage');
+    }
+  });
+
+  it('ninguna otra función depende del stage', () => {
+    const conditional = functions.filter(([, fn]) => fn.Condition !== undefined);
+    expect(conditional.map(([name]) => name)).toEqual(['SimulateDonationFunction']);
   });
 });

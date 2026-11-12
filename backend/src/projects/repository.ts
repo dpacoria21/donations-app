@@ -97,6 +97,15 @@ export class InMemoryProjectRepository implements ProjectRepository {
     return { ok: true, project: { ...updated } };
   }
 
+  /**
+   * Solo memoria: imita el `ADD confirmedAmountCents` que hace la transacción de la simulación
+   * en DynamoDB (fase 5). Es síncrono, así que dos confirmaciones no pueden pisarse.
+   */
+  addConfirmed(projectId: string, amountCents: number): void {
+    const current = this.#projects.get(projectId);
+    if (current) current.confirmedAmountCents += amountCents;
+  }
+
   async publish(
     projectId: string,
     now: string,

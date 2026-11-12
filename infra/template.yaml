@@ -13,8 +13,10 @@ Parameters:
   StageName:
     Type: String
     Default: academic
-    AllowedValues: [academic]
-    Description: Stage de API Gateway. La simulación de pagos solo existe en `academic`.
+    AllowedValues: [academic, prod]
+    Description: >-
+      Stage de API Gateway. La simulación de pagos solo existe en `academic` (CA-06.1); con
+      `prod` la plantilla no crea esa ruta ni su función.
   AllowedOrigins:
     Type: CommaDelimitedList
     Default: http://localhost:5173
@@ -32,6 +34,11 @@ Parameters:
     Default: 14
     AllowedValues: [1, 3, 5, 7, 14]
     Description: Retención de CloudWatch Logs; como máximo 14 días (CA-NF07.1).
+
+Conditions:
+  # La simulación de pagos (HU-06) solo se despliega en el stage académico (CA-06.1).
+  IsAcademicStage:
+    Fn::Equals: [{ Ref: StageName }, academic]
 
 Globals:
   Function:
@@ -956,6 +963,90 @@ Resources:
             Auth:
               Authorizer: CognitoJwt
               AuthorizationScopes: [api/donations.read]
+
+  # ---------------------------------------------------------------------------------------
+  # Simulación de pagos (HU-06). Función, rol y log group solo existen en el stage academic.
+  # ---------------------------------------------------------------------------------------
+  SimulateDonationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: IsAcademicStage
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-simulate-donation
+      RetentionInDays: !Ref LogRetentionDays
+
+  # Una transacción cambia la donación (condicionada a PENDIENTE y al donorSub), suma al
+  # proyecto con ADD si se confirma y guarda el evento (CA-06.2, CA-NF04.2).
+  SimulateDonationRole:
+    Type: AWS::IAM::Role
+    Condition: IsAcademicStage
+    Properties:
+      Description: POST /v1/donations/{donationId}/simulate. Donations (lectura y UpdateItem), Projects (UpdateItem) y AuditEvents (PutItem).
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: write-own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt SimulateDonationLogGroup.Arn
+        - PolicyName: simulate-donation
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:UpdateItem]
+                Resource: !GetAtt DonationsTable.Arn
+        - PolicyName: add-confirmed-amount
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:UpdateItem]
+                Resource: !GetAtt ProjectsTable.Arn
+        - PolicyName: write-audit-events
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:PutItem]
+                Resource: !GetAtt AuditEventsTable.Arn
+
+  SimulateDonationFunction:
+    Type: AWS::Serverless::Function
+    Condition: IsAcademicStage
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-simulate-donation
+      Description: POST /v1/donations/{donationId}/simulate (HU-06, solo stage academic)
+      CodeUri: ../backend/dist/donations
+      Handler: handlers.simulateDonation
+      Role: !GetAtt SimulateDonationRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref SimulateDonationLogGroup
+      Environment:
+        Variables:
+          DONATIONS_TABLE: !Ref DonationsTable
+          PROJECTS_TABLE: !Ref ProjectsTable
+          AUDIT_EVENTS_TABLE: !Ref AuditEventsTable
+          AUDIT_PSEUDONYM_KEY: !Ref AWS::StackId
+      Events:
+        SimulateDonation:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: POST
+            Path: /v1/donations/{donationId}/simulate
+            Auth:
+              Authorizer: CognitoJwt
+              AuthorizationScopes: [api/donations.write]
 
 Outputs:
   ApiUrl:

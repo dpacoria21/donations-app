@@ -145,18 +145,19 @@ datos inválidos → 400, editar, meta menor que lo recaudado → 409, publicar,
 
 ## Endpoints implementados
 
-| Método | Ruta                                | Acceso                                  | Respuestas                        |
-| ------ | ----------------------------------- | --------------------------------------- | --------------------------------- |
-| GET    | `/v1/projects`                      | Público                                 | 200                               |
-| GET    | `/v1/projects/{projectId}`          | Público (solo PUBLICADO)                | 200 / 404                         |
-| GET    | `/v1/projects/{projectId}/stats`    | Público (solo PUBLICADO)                | 200 / 404                         |
-| GET    | `/v1/donations/me`                  | `api/donations.read` + DONANTE          | 200 / 401 / 403                   |
-| GET    | `/v1/donations/{donationId}`        | `api/donations.read` + DONANTE (propia) | 200 / 401 / 403 / 404             |
-| POST   | `/v1/donations` + `Idempotency-Key` | `api/donations.write` + DONANTE         | 201 / 400 / 401 / 403 / 404 / 409 |
-| GET    | `/v1/manage/projects`               | `api/projects.write` + GESTOR           | 200 / 401 / 403                   |
-| POST   | `/v1/projects`                      | `api/projects.write` + GESTOR           | 201 / 400 / 401 / 403             |
-| PATCH  | `/v1/projects/{projectId}`          | `api/projects.write` + GESTOR           | 200 / 400 / 401 / 403 / 404 / 409 |
-| PATCH  | `/v1/projects/{projectId}/publish`  | `api/projects.write` + GESTOR           | 200 / 401 / 403 / 404 / 409       |
+| Método | Ruta                                  | Acceso                                                            | Respuestas                        |
+| ------ | ------------------------------------- | ----------------------------------------------------------------- | --------------------------------- |
+| GET    | `/v1/projects`                        | Público                                                           | 200                               |
+| GET    | `/v1/projects/{projectId}`            | Público (solo PUBLICADO)                                          | 200 / 404                         |
+| GET    | `/v1/projects/{projectId}/stats`      | Público (solo PUBLICADO)                                          | 200 / 404                         |
+| GET    | `/v1/donations/me`                    | `api/donations.read` + DONANTE                                    | 200 / 401 / 403                   |
+| GET    | `/v1/donations/{donationId}`          | `api/donations.read` + DONANTE (propia)                           | 200 / 401 / 403 / 404             |
+| POST   | `/v1/donations` + `Idempotency-Key`   | `api/donations.write` + DONANTE                                   | 201 / 400 / 401 / 403 / 404 / 409 |
+| POST   | `/v1/donations/{donationId}/simulate` | `api/donations.write` + DONANTE (propia); **solo stage academic** | 200 / 400 / 401 / 403 / 404 / 409 |
+| GET    | `/v1/manage/projects`                 | `api/projects.write` + GESTOR                                     | 200 / 401 / 403                   |
+| POST   | `/v1/projects`                        | `api/projects.write` + GESTOR                                     | 201 / 400 / 401 / 403             |
+| PATCH  | `/v1/projects/{projectId}`            | `api/projects.write` + GESTOR                                     | 200 / 400 / 401 / 403 / 404 / 409 |
+| PATCH  | `/v1/projects/{projectId}/publish`    | `api/projects.write` + GESTOR                                     | 200 / 401 / 403 / 404 / 409       |
 
 La edición sigue la decisión D2 de [tasks.md](../tasks.md): título, descripción y meta en
 cualquier estado; la meta nunca por debajo de lo recaudado; no se puede despublicar.
@@ -208,6 +209,28 @@ ni se piden datos de pago (CA-05.5). Exige la cabecera `Idempotency-Key` (UUID):
    simultáneas con la misma clave, solo una crea la donación y las demás repiten su respuesta.
 
 Los registros de idempotencia caducan a las 24 h (TTL `expiresAt`).
+
+## Simulación de pagos (solo stage `academic`)
+
+`POST /v1/donations/{donationId}/simulate` con `{ "outcome": "CONFIRMADA_SIMULADA" }` o
+`"RECHAZADA_SIMULADA"`. Una transacción cambia la donación solo si sigue
+`PENDIENTE_SIMULACION` y es del `sub` del token; si se confirma, `ADD` suma el monto al
+proyecto en la misma escritura. Una segunda simulación, aunque llegue en paralelo, responde
+409 y no suma (T08). La ruta, su función y su rol existen solo con `StageName=academic`
+(`Condition: IsAcademicStage` en la plantilla).
+
+**¿Por qué `TransactWriteItems` condicionado? (CA-NF04.2)** Leer la donación, comprobar su
+estado y luego escribir dejaría una ventana en la que dos solicitudes leen «pendiente» y ambas
+suman. Con la condición dentro de la escritura, DynamoDB serializa las solicitudes: solo la
+primera cumple la condición y las demás se cancelan enteras, sin efectos parciales. Hacerlo en
+una transacción garantiza además que el estado de la donación, el acumulado del proyecto y el
+evento de auditoría cambian juntos o no cambian.
+
+Evidencia de T08 contra el stage desplegado:
+
+```bash
+API_URL=<ApiUrl> ACCESS_TOKEN=<token de DONANTE> DONATION_ID=<id pendiente> npm run evidence:t08
+```
 
 ## Auditoría
 
