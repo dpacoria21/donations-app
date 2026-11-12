@@ -98,3 +98,61 @@ API_URL=<ApiUrl> ACCESS_TOKEN=<token> DONATION_ID=<id> npm run evidence:t08
 
 Esperado: `1 × 200, 9 × 409` y el acumulado del proyecto sube exactamente el monto de la
 donación. Guardar la salida en `evidence/T08/`.
+
+## Rendimiento con 50 proyectos (CA-NF05.1, CA-NF05.2)
+
+Escribe en la tabla `Projects` compartida: hacerlo cuando nadie esté haciendo la demo. Desde
+`backend/`, con `aws login` hecho:
+
+```bash
+PROJECTS_TABLE=<ProjectsTableName> AWS_PROFILE=donations-dev npm run seed:projects -- --load
+```
+
+```bash
+API_URL=<ApiUrl> npm run evidence:perf > ../evidence/performance/report.md
+```
+
+```bash
+PROJECTS_TABLE=<ProjectsTableName> AWS_PROFILE=donations-dev npm run seed:projects -- --remove-load
+```
+
+El primer comando crea 50 proyectos PUBLICADO «Proyecto de carga NN» con IDs `10ad0000-…`; el
+último borra solo esos. El reporte indica la fecha, la herramienta, el método (5 solicitudes de
+calentamiento sin contar y 100 medidas por ruta) y las condiciones. Se mide desde el equipo de
+quien lo ejecuta (Perú → us-east-2), una condición más exigente que «un cliente cercano a la
+región»; para medir desde la región, ejecutarlo en CloudShell.
+
+## Evidencia de IAM, logs y CloudTrail (fase 6)
+
+Solo lectura. Desde `backend/`, con `aws login` hecho:
+
+```bash
+AWS_PROFILE=donations-dev npm run evidence:iam > ../evidence/T10/iam-report.md
+```
+
+```bash
+AWS_PROFILE=donations-dev npm run evidence:observability > ../evidence/observability/report.md
+```
+
+Revisar que el reporte no contenga tokens ni correos antes de hacer commit (los scripts no los
+leen, pero es la regla para cualquier evidencia).
+
+## HU-10 — Consultar la auditoría (CA-10.1)
+
+1. Dar de alta un AUDITOR con MFA (procedimiento del inicio de este documento).
+2. Iniciar sesión en la SPA con esa cuenta y abrir «Auditoría»; filtrar por «Publicación de
+   proyecto» y un rango de fechas.
+3. Con un token de DONANTE o de GESTOR, `GET /v1/audit` → **403**.
+
+## HU-12 — Verified Permissions (CA-12.1, CA-12.2)
+
+1. Desplegar con el motor externo:
+
+   ```bash
+   sam deploy --parameter-overrides AuthorizationEngine=verified-permissions
+   ```
+
+2. Repetir en Postman T03 (DONANTE crea un proyecto → 403), T09 (otro DONANTE lee una donación
+   → 404) y T12 (GESTOR lee historiales → 403), más los casos permitidos.
+3. En CloudTrail, buscar eventos `IsAuthorized` (fuente `verifiedpermissions.amazonaws.com`).
+4. Volver al motor embebido con `AuthorizationEngine=embedded` si se prefiere para la demo.
