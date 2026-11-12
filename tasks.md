@@ -27,14 +27,14 @@ requirements.md §7.
 | 1    | Esqueletos (backend y frontend) y CI     | Completa  |
 | 2    | Infraestructura base y autenticación     | Completa² |
 | 3    | Proyectos y catálogo                     | Completa  |
-| 4    | Donaciones e idempotencia                | En curso  |
-| 5    | Simulación, concurrencia, MFA y frontend | En curso  |
+| 4    | Donaciones e idempotencia                | Completa  |
+| 5    | Simulación, concurrencia, MFA y frontend | Completa  |
 | 6    | Endurecimiento y evidencias              | En curso  |
 | 7    | Extensiones (opcional)                   | En curso  |
 | 8    | Cierre, entrega y limpieza               | Pendiente |
 
 ¹ Falta solo invitar al resto del equipo a la cuenta AWS con MFA, cuando se sumen (D3).
-² Falta T11 con un ID token en Postman, para cerrar la decisión D4.
+² T11 medido en el stage: el ID token se rechaza con 403, como prevé design.md §4 (decisión D4).
 
 ---
 
@@ -185,8 +185,8 @@ Parte 2 de la fase: definido en `infra/template.yaml` y probado en
       el `sub` del token (CA-04.2, CA-04.3).
 - [x] El servidor local verifica tokens reales de Cognito con `aws-jwt-verify` y aplica los
       scopes igual que el JWT authorizer.
-- [ ] Usuarios de prueba ficticios para DONANTE, GESTOR y AUDITOR, creados tras el despliegue
-      con los comandos de `backend/README.md`. El visitante no tiene cuenta.
+- [x] Usuarios de prueba ficticios creados tras el despliegue: `donante1`, `donante2`, `gestor1`
+      y `auditor1` (estos dos con TOTP) y `gestor-sin-mfa` para T14. El visitante no tiene cuenta.
 
 ### Pruebas de la fase
 
@@ -196,8 +196,8 @@ Parte 2 de la fase: definido en `infra/template.yaml` y probado en
       firma pero no tiene scopes) y, si llegara a la Lambda, 401 por `token_use`.
 - [x] T02 y T11 (token alterado) contra el stage desplegado: 401 `{"message":"Unauthorized"}`
       del JWT authorizer, sin invocar la Lambda.
-- [ ] T11 con el ID token, un token vencido y uno de otro app client, con Postman y usuarios
-      reales. Anotar el código real del ID token para la decisión D4.
+- [x] T11 contra el stage (2026-11-12, `npm run evidence:api`): sin token y con la firma
+      alterada → 401; un token vencido → 401 (T13); el ID token → **403** (decisión D4).
 
 ### Frontend
 
@@ -317,8 +317,8 @@ frontend). Falta desplegar y repetir las pruebas contra el stage.
       igual que una inexistente (CA-07.2).
 - [x] Dos funciones nuevas en SAM con roles mínimos. La de creación tiene `ConditionCheckItem`
       sobre Projects y escritura solo en Idempotency, Donations y AuditEvents.
-- [ ] Desplegar (`npm run build` y `sam deploy`) y ejecutar la carpeta «Donaciones (protegido)»
-      de Postman contra el stage.
+- [x] Desplegado y probado contra el stage con `npm run evidence:api` (mismas pruebas que la carpeta
+      «Donaciones (protegido)» de Postman, automatizadas y cruzadas con los access logs).
 
 ### Pruebas de la fase
 
@@ -333,7 +333,8 @@ frontend). Falta desplegar y repetir las pruebas contra el stage.
 - [x] T09 automatizada: un donante consulta una donación ajena → 404, idéntico a uno inexistente
       y sin filtrar datos (CA-07.2).
 - [x] T12 automatizada: un gestor consulta el historial o una donación → 403 (CA-04.2).
-- [ ] T04–T07 y T09 contra el stage desplegado con Postman (T09 con dos donantes).
+- [x] T04–T07 y T09 contra el stage (2026-11-12) con `npm run evidence:api`, que inicia sesión con
+      dos donantes por PKCE y llama al API directamente (`evidence/api/report.md`).
 
 ### Frontend
 
@@ -364,7 +365,8 @@ frontend). Falta desplegar, publicar la SPA y reunir la evidencia de T08, T13 y 
       CA-06.3).
 - [x] Documentado en `backend/README.md` por qué se eligió `TransactWriteItems` condicionado
       (CA-NF04.2).
-- [ ] Desplegar y ejecutar en Postman «HU-06 — Confirmar» y «Simular otra vez → 409».
+- [x] HU-06 contra el stage: confirmar → 200 y repetir → 409 (cubierto por T08 en
+      `evidence/api/report.md`).
 
 ### Identidad
 
@@ -375,21 +377,21 @@ frontend). Falta desplegar, publicar la SPA y reunir la evidencia de T08, T13 y 
       asignar el grupo; procedimiento en `docs/pruebas-manuales.md`.
 - [x] `gestor1` dado de alta con MFA (2026-11-14): sin grupo, `setup:mfa`, verificado
       `SOFTWARE_TOKEN_MFA` y grupo GESTOR reasignado.
-- [ ] Dar de alta con MFA a un AUDITOR de prueba.
-- [ ] Demostrar que revocar el refresh token impide renovar la sesión, mientras que el access
-      token emitido sigue valiendo hasta expirar (CA-03.3, CA-03.4). Procedimiento en
-      `docs/pruebas-manuales.md`.
+- [x] Dar de alta con MFA a un AUDITOR de prueba: `auditor1` (2026-11-12, `evidence/HU-10/`).
+- [x] Revocar el refresh token impide renovar la sesión (`invalid_grant`), mientras que el access
+      token emitido sigue valiendo hasta expirar (CA-03.3, CA-03.4); ver T13.
 
 ### Pruebas de la fase
 
 - [x] T08 automatizada: 10 confirmaciones concurrentes → un solo 200 y un solo incremento. Una
       prueba de mutación confirmó que falla sin la condición de estado (CA-06.2, CA-NF04.1).
-- [ ] T08 contra el stage con `npm run evidence:t08` y guardar la salida en `evidence/T08/`.
-- [ ] T13: token revocado usado antes de expirar → aceptado; después de expirar → rechazado
-      (CA-03.4).
+- [x] T08 contra el stage (2026-11-12): 1 × 200, 9 × 409 y un solo incremento de 100 céntimos
+      (`evidence/api/report.md`, cruzado con los access logs).
+- [x] T13 contra el stage (2026-11-12): revocar → 200, renovar → 400 `invalid_grant`, el access token
+      antes de expirar → 200 y después → 401 (CA-03.4).
 - [x] T14 automatizada: el trigger rechaza a GESTOR y AUDITOR sin TOTP (y sin aceptar SMS).
-- [ ] T14 contra el stage: un GESTOR sin segundo factor no obtiene tokens. Guardar la captura
-      (CA-11.2).
+- [x] T14 contra el stage (2026-11-12): `gestor-sin-mfa` no obtiene tokens; el trigger registra
+      `MFA_REQUIRED` en `TokenGeneration_HostedAuth` (`evidence/T14/`) (CA-11.2).
 
 ### Frontend y publicación
 
@@ -436,10 +438,14 @@ rendimiento, que necesita cargar 50 proyectos en la tabla compartida.
       log JSON de Lambda, con el resumen por ruta y estado (`evidence/observability/report.md`)
       (CA-NF07.2).
 - [x] CloudTrail registra cada `CreateChangeSet` y `ExecuteChangeSet` del stack (CA-NF07.2).
-- [ ] Rendimiento con 50 proyectos (CA-NF05.1, CA-NF05.2): el script `npm run evidence:perf`
-      está listo (calentamiento sin contar, 100 solicitudes secuenciales por ruta, p50/p95/p99).
-      Falta ejecutarlo: cargar los proyectos con `npm run seed:projects -- --load`, medir y
-      borrarlos con `--remove-load` (pasos en `docs/pruebas-manuales.md`).
+- [x] Rendimiento con 54 proyectos publicados (2026-11-12): p95 de 199 ms en el catálogo, 152 ms
+      en el detalle y 147 ms en las estadísticas, sin errores; el límite es 1500 ms. Medido
+      desde Perú con 5 solicitudes de calentamiento y 100 medidas por ruta; los 50 proyectos de
+      carga se borraron después (`evidence/performance/report.md`) (CA-NF05.1, CA-NF05.2).
+- [x] CORS de la SPA publicada: SAM no transformaba el `Fn::Split`/`Fn::Join` de
+      `CorsConfiguration` y el API seguía admitiendo solo `localhost` desde la fase 5, así que la
+      SPA en CloudFront no cargaba datos. Ahora `AllowOrigins: !Ref AllowedOrigins` y la URL de
+      CloudFront va en `samconfig.toml`; una prueba lo comprueba.
 - [x] Accesibilidad WCAG 2.2 AA (CA-NF06.1, CA-NF06.2): axe-core en CI sobre 8 pantallas y en
       el navegador (con contraste y tamaño de objetivos) sin violaciones; revisión manual a
       375 px y con teclado. Se corrigieron el aviso fuera de región, el foco visible y los
@@ -499,17 +505,17 @@ rendimiento, que necesita cargar 50 proyectos en la tabla compartida.
 | T01 | Visitante consulta proyectos              | 200, sin borradores                | 3    | ✅         | ✅            |
 | T02 | Sin token intenta donar                   | 401                                | 2    | ✅         | ✅            |
 | T03 | Donante intenta crear proyecto            | 403                                | 3    | ✅         | ✅            |
-| T04 | Donante envía 0, 100001 o valor no entero | 400                                | 4    | ✅         | ⬜            |
-| T05 | Donante crea intención válida             | 201, pendiente, sin cargo          | 4    | ✅         | ⬜            |
-| T06 | Repite clave y payload idénticos          | Mismo resultado, una sola donación | 4    | ✅         | ⬜            |
-| T07 | Repite clave con payload distinto         | 409                                | 4    | ✅         | ⬜            |
-| T08 | 10 confirmaciones concurrentes            | Un solo incremento                 | 5    | ✅         | ⬜            |
-| T09 | Donante consulta donación ajena           | 403/404 sin filtración             | 4    | ✅         | ⬜            |
+| T04 | Donante envía 0, 100001 o valor no entero | 400                                | 4    | ✅         | ✅            |
+| T05 | Donante crea intención válida             | 201, pendiente, sin cargo          | 4    | ✅         | ✅            |
+| T06 | Repite clave y payload idénticos          | Mismo resultado, una sola donación | 4    | ✅         | ✅            |
+| T07 | Repite clave con payload distinto         | 409                                | 4    | ✅         | ✅            |
+| T08 | 10 confirmaciones concurrentes            | Un solo incremento                 | 5    | ✅         | ✅            |
+| T09 | Donante consulta donación ajena           | 403/404 sin filtración             | 4    | ✅         | ✅            |
 | T10 | Lambda de listado intenta escribir        | `AccessDenied` y error controlado  | 6    | ✅         | ✅            |
-| T11 | ID token o token alterado como Bearer     | 401                                | 2    | —          | ⬜            |
+| T11 | ID token o token alterado como Bearer     | 401                                | 2    | ✅         | ✅            |
 | T12 | Gestor consulta historial de un donante   | 403/404                            | 4    | ✅         | ✅            |
-| T13 | Token revocado usado antes de expirar     | Aceptado hasta expirar; luego 401  | 5    | —          | ⬜            |
-| T14 | GESTOR inicia sesión sin segundo factor   | No obtiene tokens                  | 5    | ✅         | ⬜            |
+| T13 | Token revocado usado antes de expirar     | Aceptado hasta expirar; luego 401  | 5    | ✅         | ✅            |
+| T14 | GESTOR inicia sesión sin segundo factor   | No obtiene tokens                  | 5    | ✅         | ✅            |
 
 «—» indica que la prueba depende de API Gateway, IAM o Cognito y solo se puede demostrar contra
 AWS.
@@ -538,12 +544,13 @@ Conviene acordarlas con el docente antes de la fase indicada.
 - **D3 (fase 0):** CA-NF03.3 pide usuarios IAM con MFA, pero la cuenta usa la nueva experiencia
   de AWS, donde los integrantes se invitan como _team members_ desde AWS Settings. Hay que
   acordar cómo se acredita.
-- **D4 (fase 2):** CA-03.2 y T11 piden 401 para un ID token, pero el JWT authorizer de HTTP API
-  acepta su firma y su `aud` (es el `client_id`) y lo rechaza por no tener scopes: responde
-  **403**. La Lambda además lo rechaza con 401 (`token_use`), aunque no llega a ejecutarse. El
-  servidor local imita los 403. Opciones: aceptar 403 como «rechazado» y documentarlo, o
-  quitar los scopes del authorizer y validarlos solo en Lambda (contradice design.md §4).
-  Confirmar con el docente tras medir el código real en el stage desplegado.
+- **D4 (fase 2) — Decidida el 2026-11-12:** se sigue design.md §4: «las rutas protegidas declaran
+  `AuthorizationScopes` en SAM, de modo que un ID token es rechazado». El JWT authorizer de HTTP
+  API acepta la firma y el `aud` del ID token (es el `client_id`), pero lo rechaza por no tener
+  scopes y responde **403**; un token alterado, vencido o ausente responde 401. Para T11 y CA-03.2
+  el ID token cuenta como rechazado con 403. La Lambda además lo rechazaría con 401
+  (`token_use`), aunque no llega a ejecutarse. No se quitan los scopes del authorizer, porque
+  eso contradiría design.md §4. Medido en el stage el 2026-11-12 (`evidence/api/report.md`).
 - **D5 (fase 5) — Decidida el 2026-11-14:** Cognito solo permite MFA obligatorio para todo
   el pool, y ya no se puede activar en un pool existente. Se mantiene el MFA opcional (TOTP)
   y un trigger _pre token generation_ rechaza la emisión de tokens a GESTOR y AUDITOR sin

@@ -307,12 +307,18 @@ describe('infra/template.yaml: HTTP API', () => {
 
   it('admite CORS solo de los orígenes configurados', () => {
     const cors = api.CorsConfiguration as { AllowOrigins: unknown; AllowHeaders: string[] };
-    // Los orígenes del parámetro más la SPA publicada; nunca '*'.
-    const origins = JSON.stringify(cors.AllowOrigins);
-    expect(origins).toContain('{"Ref":"AllowedOrigins"}');
-    expect(origins).toContain('https://${SpaDistribution.DomainName}');
-    expect(origins).not.toContain('"*"');
+    // Solo `!Ref`: SAM no transforma Fn::Split/Fn::Join en CorsConfiguration (fase 6).
+    expect(cors.AllowOrigins).toEqual({ Ref: 'AllowedOrigins' });
     expect(cors.AllowHeaders).toEqual(['authorization', 'content-type', 'idempotency-key']);
+  });
+
+  it('samconfig admite el frontend local y la SPA publicada, nunca "*"', () => {
+    const samconfig = readFileSync(new URL('../../infra/samconfig.toml', import.meta.url), 'utf8');
+    const origins = /AllowedOrigins=\\"(?<list>[^\\]+)\\"/.exec(samconfig)?.groups?.list ?? '';
+    const list = origins.split(',');
+    expect(list).toContain('http://localhost:5173');
+    expect(list.some((origin) => /^https:\/\/[a-z0-9]+\.cloudfront\.net$/.test(origin))).toBe(true);
+    expect(list).not.toContain('*');
   });
 
   it('los access logs no registran IP ni cabeceras (CA-NF01.2)', () => {

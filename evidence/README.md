@@ -4,12 +4,14 @@ Evidencias sanitizadas de las pruebas contra el stage `academic` (requirements.m
 se guardan tokens, contraseñas, secretos TOTP ni correos reales: el ID de la cuenta se
 reemplaza por `<cuenta>` y los usuarios son ficticios.
 
-| Carpeta                                   | Contenido                                                                        | Cómo se generó                                           |
-| ----------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| [T10/](T10/iam-report.md)                 | T10 con IAM Policy Simulator, escrituras por rol y IAM Access Analyzer           | `npm run evidence:iam` (backend, solo lectura)           |
-| [observability/](observability/report.md) | Retención, búsqueda de secretos en logs, casos exitosos y rechazados, CloudTrail | `npm run evidence:observability` (backend, solo lectura) |
-| `performance/`                            | p95 de los GET con 50 proyectos (CA-NF05)                                        | `npm run evidence:perf` (ver docs/pruebas-manuales.md)   |
-| `T08/`, `T13/`, `T14/`                    | Concurrencia, revocación y MFA                                                   | Procedimientos de docs/pruebas-manuales.md               |
+| Carpeta                                   | Contenido                                                                                       | Cómo se generó                                                         |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| [api/](api/report.md)                     | T02, T04–T09, T11 y T13 contra el API, con dos donantes y login PKCE; cruce con los access logs | `npm run evidence:api` (backend)                                       |
+| [T10/](T10/iam-report.md)                 | T10 con IAM Policy Simulator, escrituras por rol y IAM Access Analyzer                          | `npm run evidence:iam` (backend, solo lectura)                         |
+| [observability/](observability/report.md) | Retención, búsqueda de secretos en logs, casos exitosos y rechazados, CloudTrail                | `npm run evidence:observability` (backend, solo lectura)               |
+| [HU-10/](HU-10/README.md)                 | AUDITOR con MFA consulta la auditoría desde la SPA publicada                                    | Procedimiento de alta de docs/pruebas-manuales.md y logs de CloudWatch |
+| [T14/](T14/README.md)                     | Un GESTOR sin TOTP no obtiene tokens                                                            | Usuario `gestor-sin-mfa` y logs del trigger                            |
+| `performance/`                            | p95 de los GET con 50 proyectos (CA-NF05)                                                       | `npm run evidence:perf` (ver docs/pruebas-manuales.md)                 |
 
 Las pruebas automáticas (Vitest) son la otra mitad de la evidencia: ver la matriz T01–T14 de
 [tasks.md](../tasks.md).

@@ -24,6 +24,7 @@
     "evidence:iam": "node scripts/iam-evidence.ts",
     "evidence:observability": "node scripts/observability-evidence.ts",
     "evidence:perf": "node scripts/perf.ts",
+    "evidence:api": "node scripts/api-evidence.ts",
     "setup:mfa": "node --env-file-if-exists=.env scripts/setup-mfa.ts"
   },
   "dependencies": {

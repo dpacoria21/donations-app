@@ -22,7 +22,8 @@ capabilities = "CAPABILITY_IAM"
 # Muestra el change set y pide confirmación antes de aplicar cambios.
 confirm_changeset = true
 fail_on_empty_changeset = false
-parameter_overrides = "StageName=\"academic\" AllowedOrigins=\"http://localhost:5173\" LogRetentionDays=\"14\""
+# AllowedOrigins: el frontend local y la SPA publicada (salida SpaUrl, sin barra final).
+parameter_overrides = "StageName=\"academic\" AllowedOrigins=\"http://localhost:5173,https://d2wy5nattt86i6.cloudfront.net\" LogRetentionDays=\"14\""
 tags = "project=\"donations-app\" stage=\"academic\""
 
 [default.delete.parameters]

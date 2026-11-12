@@ -20,7 +20,9 @@ Parameters:
   AllowedOrigins:
     Type: CommaDelimitedList
     Default: http://localhost:5173
-    Description: Orígenes del frontend admitidos por CORS (sin barra final).
+    Description: >-
+      Orígenes del frontend admitidos por CORS (sin barra final): el local y la salida SpaUrl.
+      En el primer despliegue la SpaUrl aún no existe; se añade después y se vuelve a desplegar.
   CallbackUrls:
     Type: CommaDelimitedList
     Default: http://localhost:5173/auth/callback,https://oauth.pstmn.io/v1/callback
@@ -413,14 +415,10 @@ Resources:
               audience:
                 - !Ref WebClient
       CorsConfiguration:
-        # Los orígenes del parámetro (desarrollo local) más la SPA publicada en CloudFront.
-        AllowOrigins:
-          Fn::Split:
-            - ","
-            - Fn::Join:
-                - ","
-                - - Fn::Join: [",", { Ref: AllowedOrigins }]
-                  - !Sub https://${SpaDistribution.DomainName}
+        # Solo `!Ref`: SAM convierte CorsConfiguration en `x-amazon-apigateway-cors` y no
+        # transforma bien Fn::Split/Fn::Join aquí (el API conservaba solo localhost). La URL de
+        # la SPA (salida SpaUrl) se añade al parámetro AllowedOrigins en samconfig.toml.
+        AllowOrigins: !Ref AllowedOrigins
         AllowMethods: [GET, POST, PATCH, OPTIONS]
         AllowHeaders: [authorization, content-type, idempotency-key]
         MaxAge: 600

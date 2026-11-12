@@ -306,5 +306,6 @@ Scripts de **solo lectura** contra el stack desplegado (con `aws login` hecho y
 | `npm run evidence:observability` | Retención, búsqueda de secretos en logs, casos 2xx y 401/403, cambios en CloudTrail |
 | `npm run evidence:perf`          | p50/p95/p99 de los GET públicos (CA-NF05; necesita `API_URL`)                       |
 | `npm run evidence:t08`           | T08: 10 confirmaciones concurrentes                                                 |
+| `npm run evidence:api`           | T02, T04–T09, T11 y T13 con dos donantes (login PKCE en el navegador)               |
 
 Las salidas se guardan en [evidence/](../evidence/README.md).
