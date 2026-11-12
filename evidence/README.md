@@ -12,6 +12,7 @@ reemplaza por `<cuenta>` y los usuarios son ficticios.
 | [HU-10/](HU-10/README.md)                 | AUDITOR con MFA consulta la auditoría desde la SPA publicada                                    | Procedimiento de alta de docs/pruebas-manuales.md y logs de CloudWatch |
 | [T14/](T14/README.md)                     | Un GESTOR sin TOTP no obtiene tokens                                                            | Usuario `gestor-sin-mfa` y logs del trigger                            |
 | `performance/`                            | p95 de los GET con 50 proyectos (CA-NF05)                                                       | `npm run evidence:perf` (ver docs/pruebas-manuales.md)                 |
+| `capturas/`                               | 19 capturas de la consola de AWS (CloudFormation, Lambda, API Gateway, Cognito, DynamoDB, IAM, CloudWatch, CloudTrail, CloudFront, S3, Verified Permissions) | Consola, solo lectura, 2026-11-12; sin barra de cuenta e ID enmascarado |
 
 Las pruebas automáticas (Vitest) son la otra mitad de la evidencia: ver la matriz T01–T14 de
 [tasks.md](../tasks.md).
