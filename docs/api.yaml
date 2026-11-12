@@ -269,6 +269,95 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
+  /v1/donations:
+    post:
+      tags: [Donaciones]
+      operationId: createDonation
+      summary: Registrar una intención de donación simulada
+      description: |
+        Solo DONANTE. Crea una donación `PENDIENTE_SIMULACION`; **no se realiza ningún cobro**
+        ni se piden datos de pago (HU-05: CA-05.1 a CA-05.5). El `donorSub` sale del token.
+
+        **Idempotencia (CA-05.4):** la clave, la donación y el evento de auditoría se escriben
+        en una sola transacción. Repetir la misma `Idempotency-Key` con el mismo cuerpo devuelve
+        la respuesta original (cabecera `Idempotency-Replayed: true`) sin crear otra donación;
+        con otro cuerpo, 409. La clave vale 24 horas y es propia de cada usuario.
+      security:
+        - cognito: [api/donations.write]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDonationRequest"
+            example:
+              projectId: 7a91d0c4-2e5f-4b38-a6c7-1d9e8f2b4a63
+              amountCents: 2500
+      responses:
+        "201":
+          description: Intención registrada (o respuesta repetida de la misma clave).
+          headers:
+            Location:
+              description: Ruta de la donación.
+              schema:
+                type: string
+            Idempotency-Replayed:
+              description: Presente con `true` si la respuesta es la de una solicitud anterior.
+              schema:
+                type: string
+                const: "true"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DonorDonation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ProjectNotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /v1/donations/{donationId}:
+    parameters:
+      - $ref: "#/components/parameters/DonationId"
+    get:
+      tags: [Donaciones]
+      operationId: getDonation
+      summary: Consultar una donación propia
+      description: |
+        Solo DONANTE y solo la propia (decisión D1). Una donación ajena responde igual que una
+        inexistente, 404, sin revelar que existe (HU-07: CA-07.2; T09).
+      security:
+        - cognito: [api/donations.read]
+      responses:
+        "200":
+          description: La donación.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DonorDonation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/DonationNotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /v1/donations/me:
     get:
       tags: [Donaciones]
@@ -328,6 +417,22 @@ components:
             api/donations.read: Consultar el historial propio (DONANTE)
             api/audit.read: Consultar eventos de auditoría (AUDITOR)
   parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: UUID generado por el cliente para cada intención; se reutiliza en los reintentos.
+      schema:
+        type: string
+        format: uuid
+    DonationId:
+      name: donationId
+      in: path
+      required: true
+      description: Identificador UUID de la donación.
+      schema:
+        type: string
+        format: uuid
     ProjectId:
       name: projectId
       in: path
@@ -394,6 +499,16 @@ components:
           example:
             code: FORBIDDEN
             message: No tiene permiso para esta operación
+            requestId: 2eee4fce-bdb1-498b-b467-6c24572eed51
+    DonationNotFound:
+      description: La donación no existe, es de otro usuario o el identificador es inválido.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: NOT_FOUND
+            message: Donación no encontrada
             requestId: 2eee4fce-bdb1-498b-b467-6c24572eed51
     ProjectNotFound:
       description: El proyecto no existe, no está publicado o el identificador es inválido.
@@ -546,6 +661,21 @@ components:
           type: integer
           minimum: 0
           maximum: 100
+    CreateDonationRequest:
+      type: object
+      additionalProperties: false
+      description: |
+        No admite otros campos: ni `donorSub` (sale del token) ni datos de pago (CA-05.3, CA-05.5).
+      required: [projectId, amountCents]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        amountCents:
+          type: integer
+          minimum: 100
+          maximum: 100000
+          description: De S/ 1.00 a S/ 1 000.00, en céntimos enteros (CA-05.1).
     DonationStatus:
       type: string
       enum: [PENDIENTE_SIMULACION, CONFIRMADA_SIMULADA, RECHAZADA_SIMULADA]

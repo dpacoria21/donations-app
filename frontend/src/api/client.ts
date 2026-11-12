@@ -15,6 +15,8 @@ interface RequestOptions {
   accessToken?: string;
   signal?: AbortSignal;
   body?: unknown;
+  /** Cabeceras adicionales, por ejemplo `Idempotency-Key`. */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -22,7 +24,7 @@ interface RequestOptions {
  * interfaz no decide permisos: si el backend responde 401/403, se muestra tal cual.
  */
 async function request<T>(method: string, path: string, options: RequestOptions): Promise<T> {
-  const headers: Record<string, string> = { accept: 'application/json' };
+  const headers: Record<string, string> = { accept: 'application/json', ...options.headers };
   if (options.accessToken) headers.authorization = `Bearer ${options.accessToken}`;
   if (options.body !== undefined) headers['content-type'] = 'application/json';
 
@@ -56,7 +58,7 @@ export function getJson<T>(
 export function sendJson<T>(
   method: 'POST' | 'PATCH',
   path: string,
-  options: { accessToken: string; body?: unknown },
+  options: { accessToken: string; body?: unknown; headers?: Record<string, string> },
 ): Promise<T> {
   return request<T>(method, path, options);
 }

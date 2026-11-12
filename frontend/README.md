@@ -53,15 +53,15 @@ del app client (parámetros `CallbackUrls` y `LogoutUrls` de `infra/template.yam
 
 ## Rutas
 
-| Ruta                         | Contenido                                               |
-| ---------------------------- | ------------------------------------------------------- |
-| `/`                          | Catálogo de proyectos publicados (HU-01)                |
-| `/proyectos/:projectId`      | Detalle, avance y última actualización (HU-02, HU-09)   |
-| `/gestion`                   | GESTOR: todos los proyectos, publicar (HU-08)           |
-| `/gestion/nuevo`             | GESTOR: crear un borrador                               |
-| `/gestion/:projectId/editar` | GESTOR: editar título, descripción y meta (decisión D2) |
-| `/cuenta`                    | Datos de la sesión e historial propio (HU-07)           |
-| `/auth/callback`             | Destino del managed login; canjea el código por tokens  |
+| Ruta                         | Contenido                                                                           |
+| ---------------------------- | ----------------------------------------------------------------------------------- |
+| `/`                          | Catálogo de proyectos publicados (HU-01)                                            |
+| `/proyectos/:projectId`      | Detalle, avance, última actualización y formulario para donar (HU-02, HU-05, HU-09) |
+| `/gestion`                   | GESTOR: todos los proyectos, publicar (HU-08)                                       |
+| `/gestion/nuevo`             | GESTOR: crear un borrador                                                           |
+| `/gestion/:projectId/editar` | GESTOR: editar título, descripción y meta (decisión D2)                             |
+| `/cuenta`                    | Datos de la sesión e historial propio (HU-07)                                       |
+| `/auth/callback`             | Destino del managed login; canjea el código por tokens                              |
 
 El enlace «Gestión» solo aparece para usuarios del grupo GESTOR, pero eso es solo orientación:
 el API rechaza con 403 a cualquier otro rol, y la interfaz muestra ese error tal cual.
@@ -76,3 +76,12 @@ npm run check    # lint + formato + typecheck + tests + build
 
 Para probar el login en local, el backend también necesita `COGNITO_USER_POOL_ID` y
 `COGNITO_CLIENT_ID` en su `.env` (ver [backend/README.md](../backend/README.md)).
+
+## Donar (HU-05)
+
+En el detalle de un proyecto publicado, una persona con sesión iniciada registra una
+**intención simulada**: solo se pide el monto (de S/ 1.00 a S/ 1,000.00), nunca datos de pago.
+Cada intención lleva una `Idempotency-Key` propia: si la respuesta no llega y se vuelve a
+enviar el mismo monto, se reutiliza la clave y el API devuelve la misma donación en lugar de
+crear otra. Con otro monto o tras un registro exitoso, la siguiente intención usa una clave
+nueva. La confirmación simulada llega en la fase 5.

@@ -1,6 +1,7 @@
 import { screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DONOR, fakeAuth, mockFetch, renderWithProviders } from '../test/render.tsx';
+import { PUBLISHED } from '../test/fixtures.ts';
+import { DONOR, fakeAuth, mockApi, renderWithProviders } from '../test/render.tsx';
 import { AccountPage } from './AccountPage.tsx';
 
 afterEach(() => {
@@ -8,6 +9,15 @@ afterEach(() => {
 });
 
 const signedIn = fakeAuth({ status: 'authenticated', user: DONOR });
+const catalog = () => Response.json({ items: [PUBLISHED] });
+const DONATION = {
+  donationId: '0d6f8a10-0000-4000-8000-000000000003',
+  projectId: PUBLISHED.projectId,
+  amountCents: 7_550,
+  currency: 'PEN',
+  status: 'PENDIENTE_SIMULACION',
+  createdAt: '2026-11-11T09:00:00.000Z',
+};
 
 describe('Mi cuenta (HU-07)', () => {
   it('sin Cognito configurado explica qué falta', () => {
@@ -16,7 +26,7 @@ describe('Mi cuenta (HU-07)', () => {
   });
 
   it('un visitante ve el botón de inicio de sesión y no se llama al API', () => {
-    const fetchMock = mockFetch(Response.json({ items: [] }));
+    const fetchMock = mockApi({});
     const { auth } = renderWithProviders(<AccountPage />);
 
     screen.getByRole('button', { name: 'Iniciar sesión' }).click();
@@ -25,40 +35,43 @@ describe('Mi cuenta (HU-07)', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('pide el historial con el access token en Authorization y lo muestra', async () => {
-    const fetchMock = mockFetch(
-      Response.json({
-        items: [
-          {
-            donationId: '0d6f8a10-0000-4000-8000-000000000003',
-            projectId: '7a91d0c4-2e5f-4b38-a6c7-1d9e8f2b4a63',
-            amountCents: 7_550,
-            currency: 'PEN',
-            status: 'PENDIENTE_SIMULACION',
-            createdAt: '2026-11-11T09:00:00.000Z',
-          },
-        ],
-      }),
-    );
+  it('muestra proyecto, fecha, importe y estado, con el token en Authorization (CA-07.1)', async () => {
+    const fetchMock = mockApi({
+      'GET /v1/donations/me': () => Response.json({ items: [DONATION] }),
+      'GET /v1/projects': catalog,
+    });
     renderWithProviders(<AccountPage />, { auth: signedIn });
 
     expect(await screen.findByText('Pendiente de simulación')).toBeInTheDocument();
     expect(screen.getByText(/75[.,]50/)).toBeInTheDocument();
     expect(screen.getByText('donante1@example.com')).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: PUBLISHED.title })).toHaveAttribute(
+      'href',
+      `/proyectos/${PUBLISHED.projectId}`,
+    );
 
-    const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toEqual(expect.stringMatching(/\/v1\/donations\/me$/));
-    expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${DONOR.accessToken}`);
+    const call = fetchMock.mock.calls.find(
+      ([url]) => typeof url === 'string' && url.endsWith('/v1/donations/me'),
+    );
+    expect(new Headers(call?.[1]?.headers).get('authorization')).toBe(
+      `Bearer ${DONOR.accessToken}`,
+    );
   });
 
   it('sin donaciones lo indica', async () => {
-    mockFetch(Response.json({ items: [] }));
+    mockApi({
+      'GET /v1/donations/me': () => Response.json({ items: [] }),
+      'GET /v1/projects': catalog,
+    });
     renderWithProviders(<AccountPage />, { auth: signedIn });
-    expect(await screen.findByText('Aún no tienes donaciones.')).toBeInTheDocument();
+    expect(await screen.findByText(/Aún no tienes donaciones/)).toBeInTheDocument();
   });
 
   it('si el API responde 403 muestra el motivo sin datos (CA-04.2)', async () => {
-    mockFetch(Response.json({ message: 'Forbidden' }, { status: 403 }));
+    mockApi({
+      'GET /v1/donations/me': () => Response.json({ message: 'Forbidden' }, { status: 403 }),
+      'GET /v1/projects': catalog,
+    });
     renderWithProviders(<AccountPage />, {
       auth: fakeAuth({ status: 'authenticated', user: { ...DONOR, groups: ['GESTOR'] } }),
     });
@@ -66,7 +79,10 @@ describe('Mi cuenta (HU-07)', () => {
   });
 
   it('si el token expiró (401) pide volver a iniciar sesión', async () => {
-    mockFetch(Response.json({ message: 'Unauthorized' }, { status: 401 }));
+    mockApi({
+      'GET /v1/donations/me': () => Response.json({ message: 'Unauthorized' }, { status: 401 }),
+      'GET /v1/projects': catalog,
+    });
     renderWithProviders(<AccountPage />, { auth: signedIn });
     expect(await screen.findByRole('alert')).toHaveTextContent('sesión expiró');
   });

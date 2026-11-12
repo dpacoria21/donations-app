@@ -27,7 +27,7 @@ requirements.md §7.
 | 1    | Esqueletos (backend y frontend) y CI     | Completa  |
 | 2    | Infraestructura base y autenticación     | Completa² |
 | 3    | Proyectos y catálogo                     | Completa  |
-| 4    | Donaciones e idempotencia                | Pendiente |
+| 4    | Donaciones e idempotencia                | En curso  |
 | 5    | Simulación, concurrencia, MFA y frontend | Pendiente |
 | 6    | Endurecimiento y evidencias              | Pendiente |
 | 7    | Extensiones (opcional)                   | Pendiente |
@@ -292,38 +292,58 @@ stage desplegado (móvil y escritorio).
 
 ## Fase 4 — Donaciones e idempotencia (día 4)
 
+Código, plantilla, OpenAPI y Postman listos y probados (167 pruebas de backend, 65 de
+frontend). Falta desplegar y repetir las pruebas contra el stage.
+
 ### Backend
 
-- [ ] Esquema Zod: `projectId` UUID y `amountCents` entero entre 100 y 100000. La cabecera
-      `Idempotency-Key` es obligatoria y debe ser un UUID (CA-05.1, CA-05.2).
-- [ ] `POST /v1/donations`: DONANTE con el scope `api/donations.write`. El `donorSub` sale del
-      token, nunca del body (CA-05.3). Proyecto inexistente → 404; no PUBLICADO → 409; datos
-      inválidos → 400. Ningún error modifica el acumulado (CA-05.2).
-- [ ] Un solo `TransactWriteItems` que cree el `IdempotencyRecord` (condición
-      `attribute_not_exists`) y la donación `PENDIENTE_SIMULACION` (AD-05, CA-05.4).
-- [ ] Repetir la misma clave con el mismo `payloadHash` (SHA-256 del body normalizado) devuelve
-      la respuesta guardada; con un hash distinto, 409. `TransactionCanceledException` → 409
-      sin efectos parciales (CA-05.4, design.md §5).
-- [ ] No pedir ni almacenar tarjeta, CVV, cuenta bancaria, DNI ni otros datos de pago (CA-05.5).
-- [ ] `GET /v1/donations/me`: solo los registros del `sub` autenticado, con fecha, importe,
+- [x] Esquema Zod: `projectId` UUID y `amountCents` entero entre 100 y 100000, sin otros campos.
+      La cabecera `Idempotency-Key` es obligatoria y debe ser un UUID (CA-05.1, CA-05.2).
+- [x] `POST /v1/donations`: DONANTE con el scope `api/donations.write`. El `donorSub` sale del
+      token; un `donorSub` en el body se rechaza (CA-05.3). Proyecto inexistente → 404; no
+      PUBLICADO → 409; datos inválidos → 400. Ningún error modifica el acumulado (CA-05.2).
+- [x] Un solo `TransactWriteItems` con 4 operaciones: el `IdempotencyRecord`
+      (`attribute_not_exists(pk)`), la donación `PENDIENTE_SIMULACION`, un `ConditionCheck` de
+      que el proyecto siga PUBLICADO y el `AuditEvent` `DONATION_CREATE` (AD-05, CA-05.4).
+- [x] Misma clave y mismo `payloadHash` (SHA-256 del body normalizado) → la respuesta guardada,
+      con `Idempotency-Replayed: true`; hash distinto → 409. Si dos solicitudes con la misma
+      clave llegan a la vez, la que pierde la transacción repite la respuesta de la ganadora
+      (CA-05.4, design.md §5). La clave es por usuario y caduca a las 24 h (TTL).
+- [x] No se piden ni almacenan tarjeta, CVV, cuenta bancaria, DNI ni otros datos de pago; el
+      esquema estricto los rechaza con 400 (CA-05.5).
+- [x] `GET /v1/donations/me`: solo los registros del `sub` autenticado, con fecha, importe,
       proyecto y estado (CA-07.1). Un GESTOR recibe 403 (CA-04.2).
-- [ ] Endpoint para consultar una donación por ID, con 404 si es ajena. Ver la decisión D1
-      (CA-07.2).
+- [x] `GET /v1/donations/{donationId}` (decisión D1): solo la propia; una ajena responde 404,
+      igual que una inexistente (CA-07.2).
+- [x] Dos funciones nuevas en SAM con roles mínimos. La de creación tiene `ConditionCheckItem`
+      sobre Projects y escritura solo en Idempotency, Donations y AuditEvents.
+- [ ] Desplegar (`npm run build` y `sam deploy`) y ejecutar la carpeta «Donaciones (protegido)»
+      de Postman contra el stage.
 
 ### Pruebas de la fase
 
-- [ ] T04: montos 0, 100001 o no enteros → 400 (CA-05.2).
-- [ ] T05: intención válida → 201, estado pendiente y sin cargo (CA-05.1).
-- [ ] T06: misma clave y mismo payload → el mismo resultado y una sola donación (CA-05.4).
-- [ ] T07: misma clave con un payload distinto → 409 (CA-05.4).
-- [ ] T09: un donante consulta una donación ajena → 403/404 sin filtrar datos (CA-07.2).
-- [ ] T12: un gestor consulta el historial de un donante → 403/404 (CA-04.2).
+- [x] T04 automatizada: montos 0, 99, 100001, negativos, no enteros o en texto → 400 (CA-05.2).
+- [x] T05 automatizada: intención válida → 201, estado pendiente, sin cargo y sin cambiar el
+      acumulado del proyecto (CA-05.1).
+- [x] T06 automatizada: misma clave y mismo payload → el mismo resultado y una sola donación;
+      también con el body reordenado (CA-05.4).
+- [x] T07 automatizada: misma clave con un payload distinto → 409 (CA-05.4).
+- [x] 10 solicitudes simultáneas con la misma clave → una sola donación. Una prueba de mutación
+      confirmó que falla si se quita la comprobación de la clave.
+- [x] T09 automatizada: un donante consulta una donación ajena → 404, idéntico a uno inexistente
+      y sin filtrar datos (CA-07.2).
+- [x] T12 automatizada: un gestor consulta el historial o una donación → 403 (CA-04.2).
+- [ ] T04–T07 y T09 contra el stage desplegado con Postman (T09 con dos donantes).
 
 ### Frontend
 
-- [ ] Formulario de donación con importe en PEN, etiquetas y errores accesibles. Generar una
-      `Idempotency-Key` por intención y reutilizarla en los reintentos (HU-05).
-- [ ] Historial propio (HU-07).
+- [x] Formulario de donación en el detalle del proyecto con importe en PEN (S/ 1.00 a
+      S/ 1,000.00), etiquetas y errores accesibles. Una `Idempotency-Key` por intención,
+      reutilizada al reintentar el mismo monto tras un fallo y renovada con otro monto o tras
+      un éxito (HU-05).
+- [x] Aviso tras registrar: «Simulación académica: no se ha realizado ningún cobro» (CA-06.4).
+- [x] Historial propio con nombre del proyecto, fecha, importe y estado (HU-07, CA-07.1).
+- [ ] Probar el flujo de donación en la SPA contra el stage con `donante1`.
 
 ## Fase 5 — Simulación, concurrencia, MFA y publicación del frontend (día 5)
 
@@ -420,12 +440,12 @@ stage desplegado (móvil y escritorio).
 | T01 | Visitante consulta proyectos              | 200, sin borradores                | 3    | ✅         | ✅            |
 | T02 | Sin token intenta donar                   | 401                                | 2    | ✅         | ✅            |
 | T03 | Donante intenta crear proyecto            | 403                                | 3    | ✅         | ✅            |
-| T04 | Donante envía 0, 100001 o valor no entero | 400                                | 4    | ⬜         | ⬜            |
-| T05 | Donante crea intención válida             | 201, pendiente, sin cargo          | 4    | ⬜         | ⬜            |
-| T06 | Repite clave y payload idénticos          | Mismo resultado, una sola donación | 4    | ⬜         | ⬜            |
-| T07 | Repite clave con payload distinto         | 409                                | 4    | ⬜         | ⬜            |
+| T04 | Donante envía 0, 100001 o valor no entero | 400                                | 4    | ✅         | ⬜            |
+| T05 | Donante crea intención válida             | 201, pendiente, sin cargo          | 4    | ✅         | ⬜            |
+| T06 | Repite clave y payload idénticos          | Mismo resultado, una sola donación | 4    | ✅         | ⬜            |
+| T07 | Repite clave con payload distinto         | 409                                | 4    | ✅         | ⬜            |
 | T08 | 10 confirmaciones concurrentes            | Un solo incremento                 | 5    | ⬜         | ⬜            |
-| T09 | Donante consulta donación ajena           | 403/404 sin filtración             | 4    | ⬜         | ⬜            |
+| T09 | Donante consulta donación ajena           | 403/404 sin filtración             | 4    | ✅         | ⬜            |
 | T10 | Lambda de listado intenta escribir        | `AccessDenied` y error controlado  | 6    | —          | ⬜            |
 | T11 | ID token o token alterado como Bearer     | 401                                | 2    | —          | ⬜            |
 | T12 | Gestor consulta historial de un donante   | 403/404                            | 4    | ✅         | ✅            |
@@ -439,9 +459,10 @@ AWS.
 
 Conviene acordarlas con el docente antes de la fase indicada.
 
-- **D1 (fase 4):** T09 pide consultar una donación ajena, pero `GET /v1/donations/me` no
-  recibe un ID. Propuesta: añadir `GET /v1/donations/{donationId}` (DONANTE propietario; 404 si
-  es ajena) y documentarlo en OpenAPI.
+- **D1 (fase 4) — Decidida el 2026-11-13:** T09 pide consultar una donación ajena, pero
+  `GET /v1/donations/me` no recibe un ID. Se añadió `GET /v1/donations/{donationId}` (DONANTE
+  propietario, `api/donations.read`); una donación ajena responde 404, igual que una
+  inexistente, para no revelar que existe. Documentado en OpenAPI.
 - **D2 (fase 3) — Decidida el 2026-11-12:** la matriz de roles dice «crear/editar/publicar»,
   pero design.md §4 no lista un endpoint de edición. Se añade `PATCH /v1/projects/{projectId}`
   (GESTOR, `api/projects.write`):

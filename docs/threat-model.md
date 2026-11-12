@@ -101,9 +101,9 @@ flowchart LR
 
 | ID  | Amenaza                                                          | Límite | Control                                                                                 | Evidencia      | Estado |
 | --- | ---------------------------------------------------------------- | ------ | --------------------------------------------------------------------------------------- | -------------- | ------ |
-| T1  | El navegador envía `donorSub`, rol, estado o un monto manipulado | TB4    | Backend autoritativo: `sub` del authorizer, Zod, `amountCents` entero y acotado         | T04, CA-NF02.2 | ⬜ F4  |
+| T1  | El navegador envía `donorSub`, rol, estado o un monto manipulado | TB4    | Backend autoritativo: `sub` del authorizer, Zod, `amountCents` entero y acotado         | T04, CA-NF02.2 | ✅ F4  |
 | T2  | Confirmaciones concurrentes cuentan dos veces la misma donación  | TB5    | `TransactWriteItems` con condición `status = PENDIENTE_SIMULACION` y `donorSub = :sub`  | T08, CA-NF04.1 | ⬜ F5  |
-| T3  | Reintentos o doble clic crean donaciones duplicadas              | TB4    | `Idempotency-Key` + `payloadHash` en la misma transacción que la donación (AD-05)       | T06, T07       | ⬜ F4  |
+| T3  | Reintentos o doble clic crean donaciones duplicadas              | TB4    | `Idempotency-Key` + `payloadHash` en la misma transacción que la donación (AD-05)       | T06, T07       | ✅ F4  |
 | T4  | Alterar la SPA publicada                                         | TB1    | Bucket privado con OAC; publicación solo desde la plantilla o el procedimiento revisado | CA-NF11.2      | ⬜ F5  |
 | T5  | Dependencia npm comprometida o vulnerable                        | TB6    | `package-lock.json` con versiones exactas, `npm ci`, `npm audit` en CI, Dependabot      | CI             | ✅ F1  |
 
@@ -119,7 +119,7 @@ flowchart LR
 
 | ID  | Amenaza                                                   | Límite | Control                                                                         | Evidencia       | Estado          |
 | --- | --------------------------------------------------------- | ------ | ------------------------------------------------------------------------------- | --------------- | --------------- |
-| I1  | BOLA: leer donaciones o historial de otro usuario         | TB4    | Ownership por `sub` contra el registro persistido; 404 sin filtrar existencia   | T09, T12        | ⬜ F4           |
+| I1  | BOLA: leer donaciones o historial de otro usuario         | TB4    | Ownership por `sub` contra el registro persistido; 404 sin filtrar existencia   | T09, T12        | ✅ F4           |
 | I2  | Ver proyectos en BORRADOR desde el catálogo público       | TB4    | Solo `PUBLICADO`; 404 uniforme para inexistente, inválido o borrador            | T01, CA-02.2    | ✅ F1 (memoria) |
 | I3  | Errores que revelan trazas, nombres de tablas o internos  | TB4    | Formato `{ code, message, requestId }`; 500 genérico                            | Tests backend   | ✅ F1           |
 | I4  | Tokens o datos personales en logs                         | TB5    | El logger no registra cabeceras, body ni claims; solo metadatos de la solicitud | CA-NF01.2       | 🟡 F1           |

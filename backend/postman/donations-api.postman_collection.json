@@ -20,6 +20,18 @@
     {
       "key": "newProjectId",
       "value": ""
+    },
+    {
+      "key": "donationKey",
+      "value": ""
+    },
+    {
+      "key": "donationId",
+      "value": ""
+    },
+    {
+      "key": "foreignDonationId",
+      "value": "00000000-0000-4000-8000-000000000000"
     }
   ],
   "event": [
@@ -676,6 +688,270 @@
                   "pm.test('items es un arreglo', () => pm.expect(body.items).to.be.an('array'));",
                   "pm.test('No repite donorSub', () => pm.expect(pm.response.text()).to.not.include('donorSub'));",
                   "pm.test('Montos en céntimos enteros', () => body.items.forEach((d) => pm.expect(Number.isInteger(d.amountCents)).to.be.true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "T05 — Crear intención de donación",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{donationKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/donations",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"projectId\": \"{{publishedProjectId}}\",\n  \"amountCents\": 2500\n}"
+            },
+            "description": "T05 · CA-05.1: con un token de DONANTE. Genera una Idempotency-Key nueva."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('donationKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('PENDIENTE_SIMULACION y sin donorSub', () => { pm.expect(body.status).to.eql('PENDIENTE_SIMULACION'); pm.expect(body).to.not.have.property('donorSub'); });",
+                  "pm.collectionVariables.set('donationId', body.donationId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "T06 — Repetir la misma clave y el mismo cuerpo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{donationKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/donations",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"projectId\": \"{{publishedProjectId}}\",\n  \"amountCents\": 2500\n}"
+            },
+            "description": "T06 · CA-05.4: misma respuesta, sin crear otra donación."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 con la misma donación', () => { pm.response.to.have.status(201); pm.expect(pm.response.json().donationId).to.eql(pm.collectionVariables.get('donationId')); });",
+                  "pm.test('Marcada como repetida', () => pm.expect(pm.response.headers.get('Idempotency-Replayed')).to.eql('true'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "T07 — Misma clave con otro monto → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{donationKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/donations",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"projectId\": \"{{publishedProjectId}}\",\n  \"amountCents\": 9900\n}"
+            },
+            "description": "T07 · CA-05.4."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('409 Conflict', () => pm.response.to.have.status(409));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "T04 — Monto 0 → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/donations",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"projectId\": \"{{publishedProjectId}}\",\n  \"amountCents\": 0\n}"
+            },
+            "description": "T04 · CA-05.2."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('400 Bad Request', () => pm.response.to.have.status(400));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "T04 — Monto 100001 → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/donations",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"projectId\": \"{{publishedProjectId}}\",\n  \"amountCents\": 100001\n}"
+            },
+            "description": "T04 · CA-05.2."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('400 Bad Request', () => pm.response.to.have.status(400));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "T04 — Monto no entero → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/donations",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"projectId\": \"{{publishedProjectId}}\",\n  \"amountCents\": 1500.5\n}"
+            },
+            "description": "T04 · CA-05.2."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('400 Bad Request', () => pm.response.to.have.status(400));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "CA-05.2 — Sin Idempotency-Key → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/donations",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"projectId\": \"{{publishedProjectId}}\",\n  \"amountCents\": 2500\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('400 Bad Request', () => pm.response.to.have.status(400));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D1 — Consultar la donación creada",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/v1/donations/{{donationId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('200 OK', () => pm.response.to.have.status(200));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "T09 — Consultar una donación ajena → 404",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/v1/donations/{{foreignDonationId}}",
+            "description": "T09 · CA-07.2: poner en foreignDonationId el ID de una donación de OTRO donante (o dejar el UUID de ejemplo). Debe responder igual que una inexistente."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 sin datos', () => { pm.response.to.have.status(404); pm.expect(pm.response.text()).to.not.include('amountCents'); });"
                 ]
               }
             }
